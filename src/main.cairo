@@ -96,7 +96,7 @@ pub mod ClaimContract {
         self.accesscontrol.initializer();
         self.accesscontrol._grant_role(DEFAULT_ADMIN_ROLE, owner);
         self.accesscontrol._grant_role(FORWARDER_ROLE, forwarder_address);
-        self.mystery_token_count.write(5_u8);
+        self.mystery_token_count.write(4_u8);
     }
 
     #[abi(embed_v0)]
@@ -109,17 +109,17 @@ pub mod ClaimContract {
             ref self: ContractState, token_index: u8, config: MysteryTokenConfig
         ) {
             self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
-            assert(token_index < 5, 'Token index out of bounds');
+            assert(token_index < 4, 'Token index out of bounds');
             self.mystery_tokens.entry(token_index).write(config.token_address);
             self.mystery_amounts.entry(token_index).write(config.amount);
         }
 
         fn set_all_mystery_tokens(ref self: ContractState, configs: Span<MysteryTokenConfig>) {
             self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
-            assert(configs.len() == 5, 'Must provide exactly 5 tokens');
+            assert(configs.len() == 4, 'Must provide exactly 5 tokens');
 
             let mut i: u8 = 0;
-            while i < 5 {
+            while i < 4 {
                 let config = *configs.at(i.into());
                 self.mystery_tokens.entry(i).write(config.token_address);
                 self.mystery_amounts.entry(i).write(config.amount);
@@ -128,7 +128,7 @@ pub mod ClaimContract {
         }
 
         fn get_mystery_token_config(self: @ContractState, token_index: u8) -> MysteryTokenConfig {
-            assert(token_index < 5, 'Token index out of bounds');
+            assert(token_index < 4, 'Token index out of bounds');
             MysteryTokenConfig {
                 token_address: self.mystery_tokens.entry(token_index).read(),
                 amount: self.mystery_amounts.entry(token_index).read(),
