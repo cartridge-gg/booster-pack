@@ -1,0 +1,13 @@
+{
+  "name": "booster-pack-devconnect",
+  "version": "1.0.0",
+  "description": "Booster pack distribution for Devconnect",
+  "scripts": {
+    "extract-fronts": "node scripts/extract-unique-fronts.js",
+    "format-merkle": "node scripts/format-merkle-drop.js"
+  },
+  "dependencies": {
+    "js-yaml": "^4.1.0",
+    "starknet": "^6.11.0"
+  }
+}
