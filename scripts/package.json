@@ -8,6 +8,7 @@
     "test-merkle": "node scripts/test-merkle-data.js"
   },
   "dependencies": {
+    "dotenv": "^17.2.3",
     "js-yaml": "^4.1.0",
     "starknet": "^6.11.0"
   }
