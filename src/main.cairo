@@ -2,22 +2,30 @@ use starknet::ContractAddress;
 
 const FORWARDER_ROLE: felt252 = selector!("FORWARDER_ROLE");
 
+#[derive(Drop, Copy, Serde, PartialEq)]
+pub struct MysteryTokenConfig {
+    pub token_address: ContractAddress,
+    pub amount: u256,
+}
+
 #[starknet::interface]
 pub trait IClaim<T> {
     fn initialize(ref self: T, forwarder_address: ContractAddress);
     fn claim_from_forwarder(ref self: T, recipient: ContractAddress, leaf_data: Span<felt252>);
+    fn set_mystery_token_config(ref self: T, token_index: u8, config: MysteryTokenConfig);
+    fn set_all_mystery_tokens(ref self: T, configs: Span<MysteryTokenConfig>);
+    fn get_mystery_token_config(self: @T, token_index: u8) -> MysteryTokenConfig;
 }
 
-#[derive(Drop, Copy, Clone, Serde, PartialEq)]
+#[derive(Drop, Copy, Serde, PartialEq)]
 pub struct LeafDataWithExtraData {
     pub amount: u256,
     pub token_address: ContractAddress,
-    pub token_id: u256,
     pub token_type: felt252,
 }
 
 #[starknet::contract]
-mod ClaimContract {
+pub mod ClaimContract {
     use booster_pack_devconnect::constants::interface::{
         IERC20TokenDispatcher, IERC20TokenDispatcherTrait, IERC721TokenDispatcher,
         IERC721TokenDispatcherTrait,
@@ -29,8 +37,9 @@ mod ClaimContract {
     use starknet::storage::{
         Map, StoragePathEntry, StoragePointerReadAccess, StoragePointerWriteAccess,
     };
-    use starknet::{ContractAddress, get_contract_address};
-    use crate::constants::identifier::{ERC_20, ERC_721};
+    use starknet::{ContractAddress, get_contract_address, get_tx_info};
+    use core::poseidon::poseidon_hash_span;
+    use crate::constants::identifier::{ERC_20, ERC_721, MYSTERY_ASSET};
     use super::*;
 
     component!(path: SRC5Component, storage: src5, event: SRC5Event);
@@ -54,6 +63,9 @@ mod ClaimContract {
         accesscontrol: AccessControlComponent::Storage,
         #[substorage(v0)]
         upgradeable: UpgradeableComponent::Storage,
+        mystery_token_count: u8,
+        mystery_tokens: Map<u8, ContractAddress>,
+        mystery_amounts: Map<u8, u256>,
     }
 
     #[event]
@@ -65,6 +77,15 @@ mod ClaimContract {
         SRC5Event: SRC5Component::Event,
         #[flat]
         UpgradeableEvent: UpgradeableComponent::Event,
+        MysteryTokenSelected: MysteryTokenSelected,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct MysteryTokenSelected {
+        pub recipient: ContractAddress,
+        pub selected_token: ContractAddress,
+        pub selected_token_index: u8,
+        pub amount: u256,
     }
 
 
@@ -75,6 +96,7 @@ mod ClaimContract {
         self.accesscontrol.initializer();
         self.accesscontrol._grant_role(DEFAULT_ADMIN_ROLE, owner);
         self.accesscontrol._grant_role(FORWARDER_ROLE, forwarder_address);
+        self.mystery_token_count.write(5_u8);
     }
 
     #[abi(embed_v0)]
@@ -83,31 +105,69 @@ mod ClaimContract {
             self.accesscontrol._grant_role(FORWARDER_ROLE, forwarder_address);
         }
 
+        fn set_mystery_token_config(
+            ref self: ContractState, token_index: u8, config: MysteryTokenConfig
+        ) {
+            self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
+            assert(token_index < 5, 'Token index out of bounds');
+            self.mystery_tokens.entry(token_index).write(config.token_address);
+            self.mystery_amounts.entry(token_index).write(config.amount);
+        }
+
+        fn set_all_mystery_tokens(ref self: ContractState, configs: Span<MysteryTokenConfig>) {
+            self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
+            assert(configs.len() == 5, 'Must provide exactly 5 tokens');
+
+            let mut i: u8 = 0;
+            while i < 5 {
+                let config = *configs.at(i.into());
+                self.mystery_tokens.entry(i).write(config.token_address);
+                self.mystery_amounts.entry(i).write(config.amount);
+                i += 1;
+            }
+        }
+
+        fn get_mystery_token_config(self: @ContractState, token_index: u8) -> MysteryTokenConfig {
+            assert(token_index < 5, 'Token index out of bounds');
+            MysteryTokenConfig {
+                token_address: self.mystery_tokens.entry(token_index).read(),
+                amount: self.mystery_amounts.entry(token_index).read(),
+            }
+        }
+
         fn claim_from_forwarder(
             ref self: ContractState, recipient: ContractAddress, leaf_data: Span<felt252>,
         ) {
             // MUST check caller is forwarder
-            // self.assert_caller_is_forwarder();
+            self.accesscontrol.assert_only_role(FORWARDER_ROLE);
 
-            // deserialize leaf_data
+            // Deserialize leaf_data
             let mut leaf_data = leaf_data;
             let data = Serde::<LeafDataWithExtraData>::deserialize(ref leaf_data).unwrap();
 
-            // mint token id and respective amount
-            let amount = data.amount;
-            let token_address = data.token_address;
-            let token_id = data.token_id;
-            let token_type = data.token_type;
+            // Handle different token types
+            if data.token_type == ERC_20 {
+                self.mint_erc20(data.token_address, recipient, data.amount);
+            } else if data.token_type == ERC_721 {
+                self.mint_erc721(data.token_address, recipient, 1);
+            } else if data.token_type == MYSTERY_ASSET {
+                // Generate random token index
+                let random_index = self.generate_random_token_index(recipient);
 
-            // check if erc20 OR erc 721
-            if token_type == ERC_20 {
-                // transfer erc20
+                // Get token config
+                let token_address = self.mystery_tokens.entry(random_index).read();
+                let amount = self.mystery_amounts.entry(random_index).read();
+
+                // Transfer the selected token
                 self.mint_erc20(token_address, recipient, amount);
-            } else if token_type == ERC_721 {
-                // transfer erc721
-                self.mint_erc721(token_address, recipient, token_id);
-            } else {
-                core::panic_with_felt252('Invalid token type');
+
+                // Emit event
+                self.emit(MysteryTokenSelected {
+                    recipient,
+                    selected_token: token_address,
+                    selected_token_index: random_index,
+                    amount,
+                });
             }
         }
     }
@@ -119,9 +179,8 @@ mod ClaimContract {
             recipient: ContractAddress,
             amount: u256,
         ) {
-            let contract = get_contract_address();
             let erc20_token = IERC20TokenDispatcher { contract_address: contract_address };
-            erc20_token.transfer_from(contract, recipient, amount);
+            erc20_token.transfer(recipient, amount);
         }
 
         fn mint_erc721(
@@ -132,7 +191,18 @@ mod ClaimContract {
         ) {
             let contract = get_contract_address();
             let erc721_token = IERC721TokenDispatcher { contract_address: contract_address };
-            erc721_token.transfer_from(contract, recipient, token_id);
+            erc721_token.safe_transfer_from(contract, recipient, token_id, array![].span());
+        }
+
+        fn generate_random_token_index(self: @ContractState, recipient: ContractAddress) -> u8 {
+            let tx_info = get_tx_info().unbox();
+            let hash: felt252 = poseidon_hash_span(
+                array![tx_info.transaction_hash, recipient.into()].span()
+            );
+            let hash_u256: u256 = hash.into();
+            let token_count: u256 = self.mystery_token_count.read().into();
+            let random_index: u8 = (hash_u256 % token_count).try_into().unwrap();
+            random_index
         }
     }
 }

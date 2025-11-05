@@ -4,7 +4,8 @@
   "description": "Booster pack distribution for Devconnect",
   "scripts": {
     "extract-fronts": "node scripts/extract-unique-fronts.js",
-    "format-merkle": "node scripts/format-merkle-drop.js"
+    "format-merkle": "node scripts/format-merkle-drop.js",
+    "test-merkle": "node scripts/test-merkle-data.js"
   },
   "dependencies": {
     "js-yaml": "^4.1.0",
