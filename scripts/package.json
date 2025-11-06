@@ -1,15 +1,14 @@
 {
   "name": "booster-pack-devconnect",
   "version": "1.0.0",
-  "description": "Booster pack distribution for Devconnect",
+  "description": "Booster pack distribution for Devconnect - Budokan Tournament Integration",
+  "type": "module",
   "scripts": {
-    "extract-fronts": "node scripts/extract-unique-fronts.js",
-    "format-merkle": "node scripts/format-merkle-drop.js",
-    "test-merkle": "node scripts/test-merkle-data.js"
+    "configure:view": "node scripts/configure-tournaments.js view",
+    "configure:set": "node scripts/configure-tournaments.js set"
   },
   "dependencies": {
     "dotenv": "^17.2.3",
-    "js-yaml": "^4.1.0",
     "starknet": "^6.11.0"
   }
 }

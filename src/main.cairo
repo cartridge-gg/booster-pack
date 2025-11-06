@@ -2,44 +2,37 @@ use starknet::ContractAddress;
 
 const FORWARDER_ROLE: felt252 = selector!("FORWARDER_ROLE");
 
-#[derive(Drop, Copy, Serde, PartialEq)]
-pub struct MysteryTokenConfig {
-    pub token_address: ContractAddress,
-    pub amount: u256,
+#[derive(Drop, Copy, Serde, PartialEq, starknet::Store)]
+pub struct TournamentConfig {
+    pub budokan_address: ContractAddress,
+    pub nums_tournament_id: u64,
+    pub ls2_tournament_id: u64,
+    pub dw_tournament_id: u64,
+    pub dark_shuffle_tournament_id: u64,
+    pub glitchbomb_tournament_id: u64, // Use 0 to disable
 }
 
 #[starknet::interface]
 pub trait IClaim<T> {
     fn initialize(ref self: T, forwarder_address: ContractAddress);
-    fn claim_from_forwarder(ref self: T, recipient: ContractAddress, leaf_data: Span<felt252>);
-    fn set_mystery_token_config(ref self: T, token_index: u8, config: MysteryTokenConfig);
-    fn set_all_mystery_tokens(ref self: T, configs: Span<MysteryTokenConfig>);
-    fn get_mystery_token_config(self: @T, token_index: u8) -> MysteryTokenConfig;
-}
-
-#[derive(Drop, Copy, Serde, PartialEq)]
-pub struct LeafDataWithExtraData {
-    pub amount: u256,
-    pub token_address: ContractAddress,
-    pub token_type: felt252,
+    fn claim_from_forwarder(ref self: T, recipient: ContractAddress);
+    fn set_tournament_config(ref self: T, config: TournamentConfig);
+    fn get_tournament_config(self: @T) -> TournamentConfig;
+    fn has_claimed(self: @T, address: ContractAddress) -> bool;
 }
 
 #[starknet::contract]
 pub mod ClaimContract {
     use booster_pack_devconnect::constants::interface::{
-        IERC20TokenDispatcher, IERC20TokenDispatcherTrait, IERC721TokenDispatcher,
-        IERC721TokenDispatcherTrait,
+        IBudokanDispatcher, IBudokanDispatcherTrait, QualificationProof,
     };
     use openzeppelin_access::accesscontrol::{AccessControlComponent, DEFAULT_ADMIN_ROLE};
     use openzeppelin_introspection::src5::SRC5Component;
     use openzeppelin_upgrades::UpgradeableComponent;
-    use openzeppelin_upgrades::interface::IUpgradeable;
     use starknet::storage::{
         Map, StoragePathEntry, StoragePointerReadAccess, StoragePointerWriteAccess,
     };
-    use starknet::{ContractAddress, get_contract_address, get_tx_info};
-    use core::poseidon::poseidon_hash_span;
-    use crate::constants::identifier::{ERC_20, ERC_721, MYSTERY_ASSET};
+    use starknet::{ContractAddress, get_contract_address};
     use super::*;
 
     component!(path: SRC5Component, storage: src5, event: SRC5Event);
@@ -63,9 +56,8 @@ pub mod ClaimContract {
         accesscontrol: AccessControlComponent::Storage,
         #[substorage(v0)]
         upgradeable: UpgradeableComponent::Storage,
-        mystery_token_count: u8,
-        mystery_tokens: Map<u8, ContractAddress>,
-        mystery_amounts: Map<u8, u256>,
+        tournament_config: TournamentConfig,
+        claimed: Map<ContractAddress, bool>,
     }
 
     #[event]
@@ -77,15 +69,22 @@ pub mod ClaimContract {
         SRC5Event: SRC5Component::Event,
         #[flat]
         UpgradeableEvent: UpgradeableComponent::Event,
-        MysteryTokenSelected: MysteryTokenSelected,
+        TournamentTicketsClaimed: TournamentTicketsClaimed,
     }
 
     #[derive(Drop, starknet::Event)]
-    pub struct MysteryTokenSelected {
+    pub struct TournamentTicketsClaimed {
         pub recipient: ContractAddress,
-        pub selected_token: ContractAddress,
-        pub selected_token_index: u8,
-        pub amount: u256,
+        pub nums_token_id: u64,
+        pub nums_entry_number: u32,
+        pub ls2_token_id: u64,
+        pub ls2_entry_number: u32,
+        pub dw_token_id: u64,
+        pub dw_entry_number: u32,
+        pub dark_shuffle_token_id: u64,
+        pub dark_shuffle_entry_number: u32,
+        pub glitchbomb_token_id: u64,
+        pub glitchbomb_entry_number: u32,
     }
 
 
@@ -96,7 +95,6 @@ pub mod ClaimContract {
         self.accesscontrol.initializer();
         self.accesscontrol._grant_role(DEFAULT_ADMIN_ROLE, owner);
         self.accesscontrol._grant_role(FORWARDER_ROLE, forwarder_address);
-        self.mystery_token_count.write(4_u8);
     }
 
     #[abi(embed_v0)]
@@ -105,104 +103,97 @@ pub mod ClaimContract {
             self.accesscontrol._grant_role(FORWARDER_ROLE, forwarder_address);
         }
 
-        fn set_mystery_token_config(
-            ref self: ContractState, token_index: u8, config: MysteryTokenConfig
-        ) {
+        fn set_tournament_config(ref self: ContractState, config: TournamentConfig) {
             self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
-            assert(token_index < 4, 'Token index out of bounds');
-            self.mystery_tokens.entry(token_index).write(config.token_address);
-            self.mystery_amounts.entry(token_index).write(config.amount);
+            self.tournament_config.write(config);
         }
 
-        fn set_all_mystery_tokens(ref self: ContractState, configs: Span<MysteryTokenConfig>) {
-            self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
-            assert(configs.len() == 4, 'Must provide exactly 5 tokens');
-
-            let mut i: u8 = 0;
-            while i < 4 {
-                let config = *configs.at(i.into());
-                self.mystery_tokens.entry(i).write(config.token_address);
-                self.mystery_amounts.entry(i).write(config.amount);
-                i += 1;
-            }
+        fn get_tournament_config(self: @ContractState) -> TournamentConfig {
+            self.tournament_config.read()
         }
 
-        fn get_mystery_token_config(self: @ContractState, token_index: u8) -> MysteryTokenConfig {
-            assert(token_index < 4, 'Token index out of bounds');
-            MysteryTokenConfig {
-                token_address: self.mystery_tokens.entry(token_index).read(),
-                amount: self.mystery_amounts.entry(token_index).read(),
-            }
+        fn has_claimed(self: @ContractState, address: ContractAddress) -> bool {
+            self.claimed.entry(address).read()
         }
 
-        fn claim_from_forwarder(
-            ref self: ContractState, recipient: ContractAddress, leaf_data: Span<felt252>,
-        ) {
+        fn claim_from_forwarder(ref self: ContractState, recipient: ContractAddress) {
             // MUST check caller is forwarder
             self.accesscontrol.assert_only_role(FORWARDER_ROLE);
 
-            // Deserialize leaf_data
-            let mut leaf_data = leaf_data;
-            let data = Serde::<LeafDataWithExtraData>::deserialize(ref leaf_data).unwrap();
+            // Prevent double claiming
+            assert(!self.claimed.entry(recipient).read(), 'Already claimed');
+            self.claimed.entry(recipient).write(true);
 
-            // Handle different token types
-            if data.token_type == ERC_20 {
-                self.mint_erc20(data.token_address, recipient, data.amount);
-            } else if data.token_type == ERC_721 {
-                self.mint_erc721(data.token_address, recipient, 1);
-            } else if data.token_type == MYSTERY_ASSET {
-                // Generate random token index
-                let random_index = self.generate_random_token_index(recipient);
+            // Get tournament configuration
+            let config = self.tournament_config.read();
 
-                // Get token config
-                let token_address = self.mystery_tokens.entry(random_index).read();
-                let amount = self.mystery_amounts.entry(random_index).read();
+            // Generate player name from address
+            let player_name = self.generate_player_name(recipient);
 
-                // Transfer the selected token
-                self.mint_erc20(token_address, recipient, amount);
+            // Get this contract's address for the allowlist qualification
+            let claim_contract_address = get_contract_address();
+            let qualification = Option::Some(QualificationProof::Allowlist(claim_contract_address));
 
-                // Emit event
-                self.emit(MysteryTokenSelected {
-                    recipient,
-                    selected_token: token_address,
-                    selected_token_index: random_index,
-                    amount,
-                });
-            }
+            // Create Budokan dispatcher
+            let budokan = IBudokanDispatcher { contract_address: config.budokan_address };
+
+            // Enter each tournament and get the minted token IDs
+            let (nums_token_id, nums_entry_number) = budokan
+                .enter_tournament(
+                    config.nums_tournament_id, player_name, recipient, qualification
+                );
+
+            let (ls2_token_id, ls2_entry_number) = budokan
+                .enter_tournament(config.ls2_tournament_id, player_name, recipient, qualification);
+
+            let (dw_token_id, dw_entry_number) = budokan
+                .enter_tournament(config.dw_tournament_id, player_name, recipient, qualification);
+
+            let (dark_shuffle_token_id, dark_shuffle_entry_number) = budokan
+                .enter_tournament(
+                    config.dark_shuffle_tournament_id, player_name, recipient, qualification
+                );
+
+            // Optional: Glitchbomb - only enter if tournament ID is not zero
+            let (glitchbomb_token_id, glitchbomb_entry_number) =
+                if config.glitchbomb_tournament_id != 0 {
+                budokan
+                    .enter_tournament(
+                        config.glitchbomb_tournament_id, player_name, recipient, qualification
+                    )
+            } else {
+                (0, 0)
+            };
+
+            // Emit event with all token IDs and entry numbers
+            self
+                .emit(
+                    TournamentTicketsClaimed {
+                        recipient,
+                        nums_token_id,
+                        nums_entry_number,
+                        ls2_token_id,
+                        ls2_entry_number,
+                        dw_token_id,
+                        dw_entry_number,
+                        dark_shuffle_token_id,
+                        dark_shuffle_entry_number,
+                        glitchbomb_token_id,
+                        glitchbomb_entry_number,
+                    }
+                );
         }
     }
+
     #[generate_trait]
     impl InternalImpl of InternalTrait {
-        fn mint_erc20(
-            self: @ContractState,
-            contract_address: ContractAddress,
-            recipient: ContractAddress,
-            amount: u256,
-        ) {
-            let erc20_token = IERC20TokenDispatcher { contract_address: contract_address };
-            erc20_token.transfer(recipient, amount);
-        }
-
-        fn mint_erc721(
-            self: @ContractState,
-            contract_address: ContractAddress,
-            recipient: ContractAddress,
-            token_id: u256,
-        ) {
-            let contract = get_contract_address();
-            let erc721_token = IERC721TokenDispatcher { contract_address: contract_address };
-            erc721_token.safe_transfer_from(contract, recipient, token_id, array![].span());
-        }
-
-        fn generate_random_token_index(self: @ContractState, recipient: ContractAddress) -> u8 {
-            let tx_info = get_tx_info().unbox();
-            let hash: felt252 = poseidon_hash_span(
-                array![tx_info.transaction_hash, recipient.into()].span()
-            );
-            let hash_u256: u256 = hash.into();
-            let token_count: u256 = self.mystery_token_count.read().into();
-            let random_index: u8 = (hash_u256 % token_count).try_into().unwrap();
-            random_index
+        fn generate_player_name(self: @ContractState, address: ContractAddress) -> felt252 {
+            // Generate a simple player name from the address
+            // Takes last 8 characters and prefixes with 'DC_' (DevConnect)
+            // Example: DC_a1b2c3d4
+            let addr_felt: felt252 = address.into();
+            addr_felt // For now, just use the address as the name
+        // In production, you might want to truncate/format this better
         }
     }
 }
