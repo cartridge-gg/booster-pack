@@ -1,10 +1,10 @@
 use snforge_std::{
-    declare, ContractClassTrait, DeclareResultTrait, start_cheat_caller_address,
+    ContractClassTrait, DeclareResultTrait, declare, start_cheat_caller_address,
     stop_cheat_caller_address,
 };
 use starknet::{ContractAddress, contract_address_const};
-use crate::{IClaimDispatcher, IClaimDispatcherTrait, TournamentConfig};
 use crate::mocks::budokan_mock::{IBudokanMockDispatcher, IBudokanMockDispatcherTrait};
+use crate::{IClaimDispatcher, IClaimDispatcherTrait, TournamentConfig};
 
 fn OWNER() -> ContractAddress {
     contract_address_const::<'OWNER'>()
@@ -37,7 +37,7 @@ fn deploy_budokan_mock() -> IBudokanMockDispatcher {
 }
 
 fn setup_tournament_config(
-    claim_contract: IClaimDispatcher, budokan: IBudokanMockDispatcher
+    claim_contract: IClaimDispatcher, budokan: IBudokanMockDispatcher,
 ) -> TournamentConfig {
     let config = TournamentConfig {
         budokan_address: budokan.contract_address,
@@ -45,7 +45,6 @@ fn setup_tournament_config(
         ls2_tournament_id: 2,
         dw_tournament_id: 3,
         dark_shuffle_tournament_id: 4,
-        glitchbomb_tournament_id: 5,
     };
 
     // Set ClaimContract on allowlist for each tournament
@@ -78,7 +77,6 @@ fn test_set_tournament_config() {
         ls2_tournament_id: 2,
         dw_tournament_id: 3,
         dark_shuffle_tournament_id: 4,
-        glitchbomb_tournament_id: 5,
     };
 
     start_cheat_caller_address(claim_contract.contract_address, OWNER());
@@ -92,7 +90,6 @@ fn test_set_tournament_config() {
     assert(read_config.ls2_tournament_id == 2, 'LS2 ID mismatch');
     assert(read_config.dw_tournament_id == 3, 'DW ID mismatch');
     assert(read_config.dark_shuffle_tournament_id == 4, 'DS ID mismatch');
-    assert(read_config.glitchbomb_tournament_id == 5, 'GB ID mismatch');
 }
 
 // ========================================
@@ -117,13 +114,11 @@ fn test_claim_tournament_entries() {
     let ls2_entries = budokan.get_tournament_entry_count(2);
     let dw_entries = budokan.get_tournament_entry_count(3);
     let dark_shuffle_entries = budokan.get_tournament_entry_count(4);
-    let glitchbomb_entries = budokan.get_tournament_entry_count(5);
 
     assert(nums_entries == 1, 'Should have 1 Nums entry');
     assert(ls2_entries == 1, 'Should have 1 LS2 entry');
     assert(dw_entries == 1, 'Should have 1 DW entry');
     assert(dark_shuffle_entries == 1, 'Should have 1 DS entry');
-    assert(glitchbomb_entries == 1, 'Should have 1 GB entry');
 
     // Verify total entries
     let total_entries = budokan.get_total_entries();
@@ -177,67 +172,17 @@ fn test_multiple_recipients() {
     let ls2_entries = budokan.get_tournament_entry_count(2);
     let dw_entries = budokan.get_tournament_entry_count(3);
     let dark_shuffle_entries = budokan.get_tournament_entry_count(4);
-    let glitchbomb_entries = budokan.get_tournament_entry_count(5);
 
     assert(nums_entries == 2, 'Should have 2 Nums entries');
     assert(ls2_entries == 2, 'Should have 2 LS2 entries');
     assert(dw_entries == 2, 'Should have 2 DW entries');
     assert(dark_shuffle_entries == 2, 'Should have 2 DS entries');
-    assert(glitchbomb_entries == 2, 'Should have 2 GB entries');
 
     // Verify total entries (2 users * 5 games = 10 entries)
     let total_entries = budokan.get_total_entries();
     assert(total_entries == 10, 'Should have 10 total entries');
 }
 
-#[test]
-fn test_claim_without_glitchbomb() {
-    let claim_contract = deploy_claim_contract();
-    let budokan = deploy_budokan_mock();
-    let recipient = RECIPIENT();
-
-    // Setup config without Glitchbomb (ID = 0)
-    let config = TournamentConfig {
-        budokan_address: budokan.contract_address,
-        nums_tournament_id: 1,
-        ls2_tournament_id: 2,
-        dw_tournament_id: 3,
-        dark_shuffle_tournament_id: 4,
-        glitchbomb_tournament_id: 0, // Disabled
-    };
-
-    // Set ClaimContract on allowlist for tournaments 1-4
-    budokan.set_tournament_allowlist(1, claim_contract.contract_address);
-    budokan.set_tournament_allowlist(2, claim_contract.contract_address);
-    budokan.set_tournament_allowlist(3, claim_contract.contract_address);
-    budokan.set_tournament_allowlist(4, claim_contract.contract_address);
-
-    start_cheat_caller_address(claim_contract.contract_address, OWNER());
-    claim_contract.set_tournament_config(config);
-    stop_cheat_caller_address(claim_contract.contract_address);
-
-    // Claim tournament entries
-    start_cheat_caller_address(claim_contract.contract_address, FORWARDER());
-    claim_contract.claim_from_forwarder(recipient);
-    stop_cheat_caller_address(claim_contract.contract_address);
-
-    // Verify entries for first 4 games only
-    let nums_entries = budokan.get_tournament_entry_count(1);
-    let ls2_entries = budokan.get_tournament_entry_count(2);
-    let dw_entries = budokan.get_tournament_entry_count(3);
-    let dark_shuffle_entries = budokan.get_tournament_entry_count(4);
-    let glitchbomb_entries = budokan.get_tournament_entry_count(5);
-
-    assert(nums_entries == 1, 'Should have 1 Nums entry');
-    assert(ls2_entries == 1, 'Should have 1 LS2 entry');
-    assert(dw_entries == 1, 'Should have 1 DW entry');
-    assert(dark_shuffle_entries == 1, 'Should have 1 DS entry');
-    assert(glitchbomb_entries == 0, 'Should have 0 GB entries');
-
-    // Verify total entries (4 games only)
-    let total_entries = budokan.get_total_entries();
-    assert(total_entries == 4, 'Should have 4 total entries');
-}
 
 #[test]
 #[should_panic(expected: ('Not on allowlist',))]
@@ -253,7 +198,6 @@ fn test_unauthorized_caller_cannot_enter_tournament() {
         ls2_tournament_id: 2,
         dw_tournament_id: 3,
         dark_shuffle_tournament_id: 4,
-        glitchbomb_tournament_id: 5,
     };
 
     start_cheat_caller_address(claim_contract.contract_address, OWNER());
@@ -303,7 +247,7 @@ fn test_mass_claiming() {
         claim_contract.claim_from_forwarder(recipient);
 
         i += 1;
-    };
+    }
 
     stop_cheat_caller_address(claim_contract.contract_address);
 
@@ -312,13 +256,11 @@ fn test_mass_claiming() {
     let ls2_entries = budokan.get_tournament_entry_count(2);
     let dw_entries = budokan.get_tournament_entry_count(3);
     let dark_shuffle_entries = budokan.get_tournament_entry_count(4);
-    let glitchbomb_entries = budokan.get_tournament_entry_count(5);
 
     assert(nums_entries == 10, 'Should have 10 Nums entries');
     assert(ls2_entries == 10, 'Should have 10 LS2 entries');
     assert(dw_entries == 10, 'Should have 10 DW entries');
     assert(dark_shuffle_entries == 10, 'Should have 10 DS entries');
-    assert(glitchbomb_entries == 10, 'Should have 10 GB entries');
 
     // Verify total entries (10 users * 5 games = 50 entries)
     let total_entries = budokan.get_total_entries();

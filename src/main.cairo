@@ -9,7 +9,6 @@ pub struct TournamentConfig {
     pub ls2_tournament_id: u64,
     pub dw_tournament_id: u64,
     pub dark_shuffle_tournament_id: u64,
-    pub glitchbomb_tournament_id: u64, // Use 0 to disable
 }
 
 #[starknet::interface]
@@ -83,8 +82,6 @@ pub mod ClaimContract {
         pub dw_entry_number: u32,
         pub dark_shuffle_token_id: u64,
         pub dark_shuffle_entry_number: u32,
-        pub glitchbomb_token_id: u64,
-        pub glitchbomb_entry_number: u32,
     }
 
 
@@ -139,9 +136,7 @@ pub mod ClaimContract {
 
             // Enter each tournament and get the minted token IDs
             let (nums_token_id, nums_entry_number) = budokan
-                .enter_tournament(
-                    config.nums_tournament_id, player_name, recipient, qualification
-                );
+                .enter_tournament(config.nums_tournament_id, player_name, recipient, qualification);
 
             let (ls2_token_id, ls2_entry_number) = budokan
                 .enter_tournament(config.ls2_tournament_id, player_name, recipient, qualification);
@@ -151,19 +146,8 @@ pub mod ClaimContract {
 
             let (dark_shuffle_token_id, dark_shuffle_entry_number) = budokan
                 .enter_tournament(
-                    config.dark_shuffle_tournament_id, player_name, recipient, qualification
+                    config.dark_shuffle_tournament_id, player_name, recipient, qualification,
                 );
-
-            // Optional: Glitchbomb - only enter if tournament ID is not zero
-            let (glitchbomb_token_id, glitchbomb_entry_number) =
-                if config.glitchbomb_tournament_id != 0 {
-                budokan
-                    .enter_tournament(
-                        config.glitchbomb_tournament_id, player_name, recipient, qualification
-                    )
-            } else {
-                (0, 0)
-            };
 
             // Emit event with all token IDs and entry numbers
             self
@@ -178,9 +162,7 @@ pub mod ClaimContract {
                         dw_entry_number,
                         dark_shuffle_token_id,
                         dark_shuffle_entry_number,
-                        glitchbomb_token_id,
-                        glitchbomb_entry_number,
-                    }
+                    },
                 );
         }
     }
@@ -193,7 +175,7 @@ pub mod ClaimContract {
             // Example: DC_a1b2c3d4
             let addr_felt: felt252 = address.into();
             addr_felt // For now, just use the address as the name
-        // In production, you might want to truncate/format this better
+            // In production, you might want to truncate/format this better
         }
     }
 }
