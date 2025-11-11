@@ -37,10 +37,11 @@ pub mod ClaimContract {
     use openzeppelin_access::accesscontrol::{AccessControlComponent, DEFAULT_ADMIN_ROLE};
     use openzeppelin_introspection::src5::SRC5Component;
     use openzeppelin_upgrades::UpgradeableComponent;
+    use openzeppelin_upgrades::interface::IUpgradeable;
     use starknet::storage::{
         Map, StoragePathEntry, StoragePointerReadAccess, StoragePointerWriteAccess,
     };
-    use starknet::{ContractAddress, get_contract_address};
+    use starknet::{ClassHash, ContractAddress, get_contract_address};
     use super::*;
 
     component!(path: SRC5Component, storage: src5, event: SRC5Event);
@@ -110,10 +111,13 @@ pub mod ClaimContract {
     #[abi(embed_v0)]
     impl ClaimImpl of IClaim<ContractState> {
         fn initialize(ref self: ContractState, forwarder_address: ContractAddress) {
+            // check if admin
+            self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
             self.accesscontrol._grant_role(FORWARDER_ROLE, forwarder_address);
         }
 
         fn set_tournament_config(ref self: ContractState, config: TournamentConfig) {
+            // check if admin
             self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
 
             // Store budokan address
@@ -259,6 +263,15 @@ pub mod ClaimContract {
             // Generate a simple player name from the address
             let addr_felt: felt252 = address.into();
             addr_felt
+        }
+    }
+
+
+    #[abi(embed_v0)]
+    impl UpgradeableImpl of IUpgradeable<ContractState> {
+        fn upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
+            self.upgradeable.upgrade(new_class_hash);
         }
     }
 }
