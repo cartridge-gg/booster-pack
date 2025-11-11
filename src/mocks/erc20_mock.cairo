@@ -22,7 +22,6 @@ pub trait IERC20Mock<TContractState> {
 
 #[starknet::contract]
 pub mod ERC20Mock {
-    use core::num::traits::Zero;
     use starknet::{ContractAddress, get_caller_address};
     use starknet::storage::{
         Map, StoragePathEntry, StoragePointerReadAccess, StoragePointerWriteAccess
