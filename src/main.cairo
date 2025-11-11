@@ -2,6 +2,15 @@ use starknet::ContractAddress;
 
 const FORWARDER_ROLE: felt252 = selector!("FORWARDER_ROLE");
 
+// Leaf data structure with token information
+#[derive(Drop, Copy, Serde, PartialEq)]
+pub struct LeafDataWithExtraData {
+    pub amount: u256,
+    pub token_address: ContractAddress,
+    pub token_type: felt252, // ERC_20, ERC_721, or MYSTERY_ASSET
+}
+
+// Tournament configuration for MYSTERY_ASSET claims
 #[derive(Drop, Copy, Serde, PartialEq, starknet::Store)]
 pub struct TournamentConfig {
     pub budokan_address: ContractAddress,
@@ -14,7 +23,7 @@ pub struct TournamentConfig {
 #[starknet::interface]
 pub trait IClaim<T> {
     fn initialize(ref self: T, forwarder_address: ContractAddress);
-    fn claim_from_forwarder(ref self: T, recipient: ContractAddress);
+    fn claim_from_forwarder(ref self: T, recipient: ContractAddress, leaf_data: Span<felt252>);
     fn set_tournament_config(ref self: T, config: TournamentConfig);
     fn get_tournament_config(self: @T) -> TournamentConfig;
     fn has_claimed(self: @T, address: ContractAddress) -> bool;
@@ -22,8 +31,11 @@ pub trait IClaim<T> {
 
 #[starknet::contract]
 pub mod ClaimContract {
+    use booster_pack_devconnect::constants::identifier::{ERC_20, ERC_721, MYSTERY_ASSET};
     use booster_pack_devconnect::constants::interface::{
-        IBudokanDispatcher, IBudokanDispatcherTrait, QualificationProof,
+        IERC20TokenDispatcher, IERC20TokenDispatcherTrait, IERC721TokenDispatcher,
+        IERC721TokenDispatcherTrait, IBudokanDispatcher, IBudokanDispatcherTrait,
+        QualificationProof,
     };
     use openzeppelin_access::accesscontrol::{AccessControlComponent, DEFAULT_ADMIN_ROLE};
     use openzeppelin_introspection::src5::SRC5Component;
@@ -68,7 +80,16 @@ pub mod ClaimContract {
         SRC5Event: SRC5Component::Event,
         #[flat]
         UpgradeableEvent: UpgradeableComponent::Event,
+        TokenClaimed: TokenClaimed,
         TournamentTicketsClaimed: TournamentTicketsClaimed,
+    }
+
+    #[derive(Drop, starknet::Event)]
+    pub struct TokenClaimed {
+        pub recipient: ContractAddress,
+        pub token_address: ContractAddress,
+        pub token_type: felt252,
+        pub amount: u256,
     }
 
     #[derive(Drop, starknet::Event)]
@@ -83,7 +104,6 @@ pub mod ClaimContract {
         pub dark_shuffle_token_id: u64,
         pub dark_shuffle_entry_number: u32,
     }
-
 
     #[constructor]
     fn constructor(
@@ -113,14 +133,69 @@ pub mod ClaimContract {
             self.claimed.entry(address).read()
         }
 
-        fn claim_from_forwarder(ref self: ContractState, recipient: ContractAddress) {
+        fn claim_from_forwarder(
+            ref self: ContractState, recipient: ContractAddress, leaf_data: Span<felt252>
+        ) {
             // MUST check caller is forwarder
             self.accesscontrol.assert_only_role(FORWARDER_ROLE);
 
-            // Prevent double claiming
-            assert(!self.claimed.entry(recipient).read(), 'Already claimed');
-            self.claimed.entry(recipient).write(true);
+            // Deserialize leaf_data
+            let mut leaf_data_mut = leaf_data;
+            let data = Serde::<LeafDataWithExtraData>::deserialize(ref leaf_data_mut).unwrap();
 
+            // Handle different token types
+            if data.token_type == ERC_20 {
+                self.transfer_erc20(data.token_address, recipient, data.amount);
+                self
+                    .emit(
+                        TokenClaimed {
+                            recipient,
+                            token_address: data.token_address,
+                            token_type: data.token_type,
+                            amount: data.amount,
+                        }
+                    );
+            } else if data.token_type == ERC_721 {
+                self.transfer_erc721(data.token_address, recipient, data.amount);
+                self
+                    .emit(
+                        TokenClaimed {
+                            recipient,
+                            token_address: data.token_address,
+                            token_type: data.token_type,
+                            amount: data.amount,
+                        }
+                    );
+            } else if data.token_type == MYSTERY_ASSET {
+                self.enter_all_tournaments(recipient);
+            }
+        }
+    }
+
+    #[generate_trait]
+    impl InternalImpl of InternalTrait {
+        fn transfer_erc20(
+            self: @ContractState,
+            token_address: ContractAddress,
+            recipient: ContractAddress,
+            amount: u256,
+        ) {
+            let erc20_token = IERC20TokenDispatcher { contract_address: token_address };
+            erc20_token.transfer(recipient, amount);
+        }
+
+        fn transfer_erc721(
+            self: @ContractState,
+            token_address: ContractAddress,
+            recipient: ContractAddress,
+            token_id: u256,
+        ) {
+            let contract = get_contract_address();
+            let erc721_token = IERC721TokenDispatcher { contract_address: token_address };
+            erc721_token.safe_transfer_from(contract, recipient, token_id, array![].span());
+        }
+
+        fn enter_all_tournaments(ref self: ContractState, recipient: ContractAddress) {
             // Get tournament configuration
             let config = self.tournament_config.read();
 
@@ -129,14 +204,18 @@ pub mod ClaimContract {
 
             // Get this contract's address for the allowlist qualification
             let claim_contract_address = get_contract_address();
-            let qualification = Option::Some(QualificationProof::Allowlist(claim_contract_address));
+            let qualification = Option::Some(
+                QualificationProof::Allowlist(claim_contract_address)
+            );
 
             // Create Budokan dispatcher
             let budokan = IBudokanDispatcher { contract_address: config.budokan_address };
 
             // Enter each tournament and get the minted token IDs
             let (nums_token_id, nums_entry_number) = budokan
-                .enter_tournament(config.nums_tournament_id, player_name, recipient, qualification);
+                .enter_tournament(
+                    config.nums_tournament_id, player_name, recipient, qualification
+                );
 
             let (ls2_token_id, ls2_entry_number) = budokan
                 .enter_tournament(config.ls2_tournament_id, player_name, recipient, qualification);
@@ -162,20 +241,14 @@ pub mod ClaimContract {
                         dw_entry_number,
                         dark_shuffle_token_id,
                         dark_shuffle_entry_number,
-                    },
+                    }
                 );
         }
-    }
 
-    #[generate_trait]
-    impl InternalImpl of InternalTrait {
         fn generate_player_name(self: @ContractState, address: ContractAddress) -> felt252 {
             // Generate a simple player name from the address
-            // Takes last 8 characters and prefixes with 'DC_' (DevConnect)
-            // Example: DC_a1b2c3d4
             let addr_felt: felt252 = address.into();
-            addr_felt // For now, just use the address as the name
-            // In production, you might want to truncate/format this better
+            addr_felt
         }
     }
 }
