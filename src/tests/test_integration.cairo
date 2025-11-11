@@ -52,15 +52,15 @@ fn deploy_erc20(
     contract_address
 }
 
-fn setup_tournament_config(
-    claim_contract: IClaimDispatcher, budokan: IBudokanMockDispatcher
-) -> TournamentConfig {
+fn setup_tournament_config(claim_contract: IClaimDispatcher, budokan: IBudokanMockDispatcher) {
+    let mut tournament_ids = ArrayTrait::new();
+    tournament_ids.append(1);
+    tournament_ids.append(2);
+    tournament_ids.append(3);
+    tournament_ids.append(4);
+
     let config = TournamentConfig {
-        budokan_address: budokan.contract_address,
-        nums_tournament_id: 1,
-        ls2_tournament_id: 2,
-        dw_tournament_id: 3,
-        dark_shuffle_tournament_id: 4,
+        budokan_address: budokan.contract_address, tournament_ids,
     };
 
     // Set ClaimContract on allowlist for each tournament
@@ -73,8 +73,6 @@ fn setup_tournament_config(
     start_cheat_caller_address(claim_contract.contract_address, OWNER());
     claim_contract.set_tournament_config(config);
     stop_cheat_caller_address(claim_contract.contract_address);
-
-    config
 }
 
 // ========================================
@@ -301,12 +299,14 @@ fn test_tournament_config() {
     let claim_contract = deploy_claim_contract();
     let budokan = deploy_budokan_mock();
 
+    let mut tournament_ids = ArrayTrait::new();
+    tournament_ids.append(1);
+    tournament_ids.append(2);
+    tournament_ids.append(3);
+    tournament_ids.append(4);
+
     let config = TournamentConfig {
-        budokan_address: budokan.contract_address,
-        nums_tournament_id: 1,
-        ls2_tournament_id: 2,
-        dw_tournament_id: 3,
-        dark_shuffle_tournament_id: 4,
+        budokan_address: budokan.contract_address, tournament_ids,
     };
 
     start_cheat_caller_address(claim_contract.contract_address, OWNER());
@@ -316,10 +316,56 @@ fn test_tournament_config() {
     let read_config = claim_contract.get_tournament_config();
 
     assert(read_config.budokan_address == budokan.contract_address, 'Budokan address mismatch');
-    assert(read_config.nums_tournament_id == 1, 'Nums ID mismatch');
-    assert(read_config.ls2_tournament_id == 2, 'LS2 ID mismatch');
-    assert(read_config.dw_tournament_id == 3, 'DW ID mismatch');
-    assert(read_config.dark_shuffle_tournament_id == 4, 'DS ID mismatch');
+    assert(read_config.tournament_ids.len() == 4, 'Tournament IDs length wrong');
+    assert(*read_config.tournament_ids.at(0) == 1, 'Tournament ID 0 mismatch');
+    assert(*read_config.tournament_ids.at(1) == 2, 'Tournament ID 1 mismatch');
+    assert(*read_config.tournament_ids.at(2) == 3, 'Tournament ID 2 mismatch');
+    assert(*read_config.tournament_ids.at(3) == 4, 'Tournament ID 3 mismatch');
+}
+
+#[test]
+fn test_tournament_config_single_tournament() {
+    let claim_contract = deploy_claim_contract();
+    let budokan = deploy_budokan_mock();
+    let recipient = RECIPIENT();
+
+    // Test with single tournament for easier testing
+    let mut tournament_ids = ArrayTrait::new();
+    tournament_ids.append(1);
+
+    let config = TournamentConfig {
+        budokan_address: budokan.contract_address, tournament_ids,
+    };
+
+    // Set ClaimContract on allowlist
+    budokan.set_tournament_allowlist(1, claim_contract.contract_address);
+
+    // Configure tournament in ClaimContract
+    start_cheat_caller_address(claim_contract.contract_address, OWNER());
+    claim_contract.set_tournament_config(config);
+    stop_cheat_caller_address(claim_contract.contract_address);
+
+    // Create leaf data for MYSTERY_ASSET claim
+    let leaf_data = LeafDataWithExtraData {
+        amount: 0,
+        token_address: contract_address_const::<0x0>(),
+        token_type: MYSTERY_ASSET,
+    };
+
+    let mut serialized = array![];
+    Serde::serialize(@leaf_data, ref serialized);
+
+    // Claim tournament entry
+    start_cheat_caller_address(claim_contract.contract_address, FORWARDER());
+    claim_contract.claim_from_forwarder(recipient, serialized.span());
+    stop_cheat_caller_address(claim_contract.contract_address);
+
+    // Verify only one entry was created
+    let tournament_entries = budokan.get_tournament_entry_count(1);
+    assert(tournament_entries == 1, 'Should have 1 entry');
+
+    let total_entries = budokan.get_total_entries();
+    assert(total_entries == 1, 'Should have 1 total entry');
 }
 
 #[test]
