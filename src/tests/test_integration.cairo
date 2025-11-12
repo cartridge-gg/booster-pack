@@ -23,6 +23,10 @@ fn RECIPIENT_2() -> ContractAddress {
     contract_address_const::<'RECIPIENT_2'>()
 }
 
+fn TREASURY() -> ContractAddress {
+    contract_address_const::<'TREASURY'>()
+}
+
 fn deploy_claim_contract(
     lords_token: ContractAddress,
     nums_token: ContractAddress,
@@ -36,6 +40,7 @@ fn deploy_claim_contract(
             @array![
                 OWNER().into(),
                 FORWARDER().into(),
+                TREASURY().into(),
                 lords_token.into(),
                 nums_token.into(),
                 survivor_token.into(),
@@ -97,12 +102,13 @@ fn setup_tournament_config(claim_contract: IClaimDispatcher, budokan: IBudokanMo
 #[test]
 fn test_claim_paper_tokens() {
     let recipient = RECIPIENT();
+    let treasury = TREASURY();
 
-    // Deploy ERC20 token and fund ClaimContract
+    // Deploy ERC20 token and fund Treasury
     let token_supply: u256 = 10000000000000000000000_u256; // 10,000 tokens
     let zero_address = contract_address_const::<0x0>();
 
-    // Deploy claim contract first to get its address, then deploy token to fund it
+    // Deploy claim contract
     let claim_contract = deploy_claim_contract(
         zero_address, // lords (not needed for this test)
         zero_address, // nums
@@ -111,12 +117,19 @@ fn test_claim_paper_tokens() {
         zero_address, // paper (will be set after deployment)
     );
 
-    let token_address = deploy_erc20("Paper", "PAPER", token_supply, claim_contract.contract_address);
+    // Deploy token to treasury
+    let token_address = deploy_erc20("Paper", "PAPER", token_supply, treasury);
 
     // Set the paper token address
     start_cheat_caller_address(claim_contract.contract_address, OWNER());
     claim_contract.set_paper_token(token_address);
     stop_cheat_caller_address(claim_contract.contract_address);
+
+    // Approve claim contract to spend from treasury
+    let token = IERC20MockDispatcher { contract_address: token_address };
+    start_cheat_caller_address(token_address, treasury);
+    token.approve(claim_contract.contract_address, token_supply);
+    stop_cheat_caller_address(token_address);
 
     let amount: u256 = 150000000000000000000_u256; // 150 tokens
 
@@ -126,7 +139,6 @@ fn test_claim_paper_tokens() {
     stop_cheat_caller_address(claim_contract.contract_address);
 
     // Verify recipient received tokens
-    let token = IERC20MockDispatcher { contract_address: token_address };
     let balance = token.balance_of(recipient);
     assert(balance == 150000000000000000000_u256, 'Wrong token balance');
 }
@@ -135,22 +147,34 @@ fn test_claim_paper_tokens() {
 fn test_multi_claim_same_user() {
     // Test that the same user can claim multiple different items
     let recipient = RECIPIENT();
+    let treasury = TREASURY();
     let zero_address = contract_address_const::<0x0>();
 
     let claim_contract = deploy_claim_contract(
         zero_address, zero_address, zero_address, zero_address, zero_address,
     );
 
-    // Deploy two different ERC20 tokens
+    // Deploy two different ERC20 tokens to treasury
     let token_supply: u256 = 10000000000000000000000_u256;
-    let paper_address = deploy_erc20("Paper", "PAPER", token_supply, claim_contract.contract_address);
-    let lords_address = deploy_erc20("Lords", "LORDS", token_supply, claim_contract.contract_address);
+    let paper_address = deploy_erc20("Paper", "PAPER", token_supply, treasury);
+    let lords_address = deploy_erc20("Lords", "LORDS", token_supply, treasury);
 
     // Set token addresses
     start_cheat_caller_address(claim_contract.contract_address, OWNER());
     claim_contract.set_paper_token(paper_address);
     claim_contract.set_lords_token(lords_address);
     stop_cheat_caller_address(claim_contract.contract_address);
+
+    // Approve claim contract to spend from treasury
+    let paper_token = IERC20MockDispatcher { contract_address: paper_address };
+    start_cheat_caller_address(paper_address, treasury);
+    paper_token.approve(claim_contract.contract_address, token_supply);
+    stop_cheat_caller_address(paper_address);
+
+    let lords_token = IERC20MockDispatcher { contract_address: lords_address };
+    start_cheat_caller_address(lords_address, treasury);
+    lords_token.approve(claim_contract.contract_address, token_supply);
+    stop_cheat_caller_address(lords_address);
 
     let paper_amount: u256 = 150000000000000000000_u256;
     let lords_amount: u256 = 75000000000000000000_u256;
@@ -166,11 +190,9 @@ fn test_multi_claim_same_user() {
     stop_cheat_caller_address(claim_contract.contract_address);
 
     // Verify both claims succeeded
-    let paper_token = IERC20MockDispatcher { contract_address: paper_address };
     let paper_balance = paper_token.balance_of(recipient);
     assert(paper_balance == 150000000000000000000_u256, 'Wrong PAPER balance');
 
-    let lords_token = IERC20MockDispatcher { contract_address: lords_address };
     let lords_balance = lords_token.balance_of(recipient);
     assert(lords_balance == 75000000000000000000_u256, 'Wrong LORDS balance');
 }
@@ -219,6 +241,7 @@ fn test_claim_mystery_tournaments() {
 #[test]
 fn test_mixed_claim_types() {
     let zero_address = contract_address_const::<0x0>();
+    let treasury = TREASURY();
     let claim_contract = deploy_claim_contract(
         zero_address, zero_address, zero_address, zero_address, zero_address,
     );
@@ -226,16 +249,27 @@ fn test_mixed_claim_types() {
 
     setup_tournament_config(claim_contract, budokan);
 
-    // Deploy tokens
+    // Deploy tokens to treasury
     let token_supply: u256 = 100000000000000000000000_u256;
-    let paper_address = deploy_erc20("Paper", "PAPER", token_supply, claim_contract.contract_address);
-    let lords_address = deploy_erc20("Lords", "LORDS", token_supply, claim_contract.contract_address);
+    let paper_address = deploy_erc20("Paper", "PAPER", token_supply, treasury);
+    let lords_address = deploy_erc20("Lords", "LORDS", token_supply, treasury);
 
     // Set token addresses
     start_cheat_caller_address(claim_contract.contract_address, OWNER());
     claim_contract.set_paper_token(paper_address);
     claim_contract.set_lords_token(lords_address);
     stop_cheat_caller_address(claim_contract.contract_address);
+
+    // Approve claim contract to spend from treasury
+    let paper_token = IERC20MockDispatcher { contract_address: paper_address };
+    start_cheat_caller_address(paper_address, treasury);
+    paper_token.approve(claim_contract.contract_address, token_supply);
+    stop_cheat_caller_address(paper_address);
+
+    let lords_token = IERC20MockDispatcher { contract_address: lords_address };
+    start_cheat_caller_address(lords_address, treasury);
+    lords_token.approve(claim_contract.contract_address, token_supply);
+    stop_cheat_caller_address(lords_address);
 
     // Recipient 1: Claims PAPER
     let recipient1 = contract_address_const::<'RECIPIENT_1'>();
@@ -256,7 +290,6 @@ fn test_mixed_claim_types() {
     stop_cheat_caller_address(claim_contract.contract_address);
 
     // Verify Recipient 1 got PAPER
-    let paper_token = IERC20MockDispatcher { contract_address: paper_address };
     let r1_balance = paper_token.balance_of(recipient1);
     assert(r1_balance == 150000000000000000000_u256, 'R1: Wrong PAPER balance');
 
@@ -265,7 +298,6 @@ fn test_mixed_claim_types() {
     assert(total_entries == 4, 'R2: Wrong tournament entries');
 
     // Verify Recipient 3 got LORDS
-    let lords_token = IERC20MockDispatcher { contract_address: lords_address };
     let r3_balance = lords_token.balance_of(recipient3);
     assert(r3_balance == 75000000000000000000_u256, 'R3: Wrong LORDS balance');
 }
@@ -278,6 +310,7 @@ fn test_mixed_claim_types() {
 #[should_panic(expected: ('Caller is missing role',))]
 fn test_only_forwarder_can_claim() {
     let zero_address = contract_address_const::<0x0>();
+    let treasury = TREASURY();
     let claim_contract = deploy_claim_contract(
         zero_address, zero_address, zero_address, zero_address, zero_address,
     );
@@ -285,12 +318,18 @@ fn test_only_forwarder_can_claim() {
     let recipient = RECIPIENT();
 
     let token_supply: u256 = 10000000000000000000000_u256;
-    let token_address = deploy_erc20("Paper", "PAPER", token_supply, claim_contract.contract_address);
+    let token_address = deploy_erc20("Paper", "PAPER", token_supply, treasury);
 
     // Set token address
     start_cheat_caller_address(claim_contract.contract_address, OWNER());
     claim_contract.set_paper_token(token_address);
     stop_cheat_caller_address(claim_contract.contract_address);
+
+    // Approve claim contract
+    let token = IERC20MockDispatcher { contract_address: token_address };
+    start_cheat_caller_address(token_address, treasury);
+    token.approve(claim_contract.contract_address, token_supply);
+    stop_cheat_caller_address(token_address);
 
     // Try to claim from unauthorized address - should panic
     start_cheat_caller_address(claim_contract.contract_address, unauthorized);
