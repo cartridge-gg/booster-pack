@@ -38,6 +38,10 @@ pub trait IClaim<T> {
     fn get_survivor_token(self: @T) -> ContractAddress;
     fn get_paper_token(self: @T) -> ContractAddress;
 
+    // Treasury address configuration
+    fn set_treasury(ref self: T, address: ContractAddress);
+    fn get_treasury(self: @T) -> ContractAddress;
+
     // Tournament configuration
     fn set_tournament_config(ref self: T, config: TournamentConfig);
     fn get_tournament_config(self: @T) -> TournamentConfig;
@@ -47,8 +51,7 @@ pub trait IClaim<T> {
 pub mod ClaimContract {
     use booster_pack_devconnect::constants::interface::{
         IBudokanDispatcher, IBudokanDispatcherTrait, IERC20TokenDispatcher,
-        IERC20TokenDispatcherTrait, IERC721TokenDispatcher, IERC721TokenDispatcherTrait,
-        QualificationProof,
+        IERC20TokenDispatcherTrait, QualificationProof,
     };
     use openzeppelin_access::accesscontrol::{AccessControlComponent, DEFAULT_ADMIN_ROLE};
     use openzeppelin_introspection::src5::SRC5Component;
@@ -81,6 +84,8 @@ pub mod ClaimContract {
         accesscontrol: AccessControlComponent::Storage,
         #[substorage(v0)]
         upgradeable: UpgradeableComponent::Storage,
+        // Treasury address that holds the assets
+        treasury: ContractAddress,
         // Tournament configuration for MYSTERY_ASSET claims
         budokan_address: ContractAddress,
         tournament_ids_len: u64,
@@ -125,6 +130,7 @@ pub mod ClaimContract {
         ref self: ContractState,
         owner: ContractAddress,
         forwarder_address: ContractAddress,
+        treasury: ContractAddress,
         lords_token: ContractAddress,
         nums_token: ContractAddress,
         survivor_token: ContractAddress,
@@ -134,6 +140,9 @@ pub mod ClaimContract {
         self.accesscontrol.initializer();
         self.accesscontrol._grant_role(DEFAULT_ADMIN_ROLE, owner);
         self.accesscontrol._grant_role(FORWARDER_ROLE, forwarder_address);
+
+        // Initialize treasury address
+        self.treasury.write(treasury);
 
         // Initialize token addresses
         self.lords_token.write(lords_token);
@@ -201,7 +210,7 @@ pub mod ClaimContract {
         ) {
             self.accesscontrol.assert_only_role(FORWARDER_ROLE);
             let token_address = self.nums_token.read();
-            self.transfer_erc721(token_address, recipient, amount);
+            self.transfer_erc20(token_address, recipient, amount);
             self.emit(TokenClaimed { recipient, token_address, amount });
         }
 
@@ -210,7 +219,7 @@ pub mod ClaimContract {
         ) {
             self.accesscontrol.assert_only_role(FORWARDER_ROLE);
             let token_address = self.survivor_token.read();
-            self.transfer_erc721(token_address, recipient, amount);
+            self.transfer_erc20(token_address, recipient, amount);
             self.emit(TokenClaimed { recipient, token_address, amount });
         }
 
@@ -270,6 +279,17 @@ pub mod ClaimContract {
         fn get_paper_token(self: @ContractState) -> ContractAddress {
             self.paper_token.read()
         }
+
+        // ============ Treasury Configuration ============
+
+        fn set_treasury(ref self: ContractState, address: ContractAddress) {
+            self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
+            self.treasury.write(address);
+        }
+
+        fn get_treasury(self: @ContractState) -> ContractAddress {
+            self.treasury.read()
+        }
     }
 
     #[generate_trait]
@@ -280,19 +300,9 @@ pub mod ClaimContract {
             recipient: ContractAddress,
             amount: u256,
         ) {
+            let treasury = self.treasury.read();
             let erc20_token = IERC20TokenDispatcher { contract_address: token_address };
-            erc20_token.transfer(recipient, amount);
-        }
-
-        fn transfer_erc721(
-            self: @ContractState,
-            token_address: ContractAddress,
-            recipient: ContractAddress,
-            token_id: u256,
-        ) {
-            let contract = get_contract_address();
-            let erc721_token = IERC721TokenDispatcher { contract_address: token_address };
-            erc721_token.safe_transfer_from(contract, recipient, token_id, array![].span());
+            erc20_token.transfer_from(treasury, recipient, amount);
         }
 
         fn enter_all_tournaments(ref self: ContractState, recipient: ContractAddress) {

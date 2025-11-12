@@ -9,15 +9,6 @@ pub trait IERC20Token<T> {
     ) -> bool;
 }
 
-// ERC721 Token Interface
-#[starknet::interface]
-pub trait IERC721Token<T> {
-    fn transfer_from(ref self: T, from: ContractAddress, to: ContractAddress, token_id: u256);
-    fn safe_transfer_from(
-        ref self: T, from: ContractAddress, to: ContractAddress, token_id: u256, data: Span<felt252>
-    );
-}
-
 // Budokan Tournament Integration
 #[derive(Drop, Serde, Copy)]
 pub enum QualificationProof {
