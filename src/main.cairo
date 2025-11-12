@@ -2,12 +2,11 @@ use starknet::ContractAddress;
 
 const FORWARDER_ROLE: felt252 = selector!("FORWARDER_ROLE");
 
-// Leaf data structure with token information
+// Simplified leaf data structure - only contains amount
+// Token addresses are now stored in the contract
 #[derive(Drop, Copy, Serde, PartialEq)]
-pub struct LeafDataWithExtraData {
+pub struct LeafData {
     pub amount: u256,
-    pub token_address: ContractAddress,
-    pub token_type: felt252 // ERC_20, ERC_721, or MYSTERY_ASSET
 }
 
 // Tournament configuration for MYSTERY_ASSET claims
@@ -20,15 +19,32 @@ pub struct TournamentConfig {
 #[starknet::interface]
 pub trait IClaim<T> {
     fn initialize(ref self: T, forwarder_address: ContractAddress);
-    fn claim_from_forwarder(ref self: T, recipient: ContractAddress, leaf_data: Span<felt252>);
+
+    // Separate claim entrypoints for each item type
+    fn claim_lords_from_forwarder(ref self: T, recipient: ContractAddress, amount: u256);
+    fn claim_nums_from_forwarder(ref self: T, recipient: ContractAddress, amount: u256);
+    fn claim_survivor_from_forwarder(ref self: T, recipient: ContractAddress, amount: u256);
+    fn claim_paper_from_forwarder(ref self: T, recipient: ContractAddress, amount: u256);
+    fn claim_mystery_from_forwarder(ref self: T, recipient: ContractAddress, amount: u256);
+
+    // Token address configuration
+    fn set_lords_token(ref self: T, address: ContractAddress);
+    fn set_nums_token(ref self: T, address: ContractAddress);
+    fn set_survivor_token(ref self: T, address: ContractAddress);
+    fn set_paper_token(ref self: T, address: ContractAddress);
+
+    fn get_lords_token(self: @T) -> ContractAddress;
+    fn get_nums_token(self: @T) -> ContractAddress;
+    fn get_survivor_token(self: @T) -> ContractAddress;
+    fn get_paper_token(self: @T) -> ContractAddress;
+
+    // Tournament configuration
     fn set_tournament_config(ref self: T, config: TournamentConfig);
     fn get_tournament_config(self: @T) -> TournamentConfig;
-    fn has_claimed(self: @T, address: ContractAddress) -> bool;
 }
 
 #[starknet::contract]
 pub mod ClaimContract {
-    use booster_pack_devconnect::constants::identifier::{ERC_20, ERC_721, MYSTERY_ASSET};
     use booster_pack_devconnect::constants::interface::{
         IBudokanDispatcher, IBudokanDispatcherTrait, IERC20TokenDispatcher,
         IERC20TokenDispatcherTrait, IERC721TokenDispatcher, IERC721TokenDispatcherTrait,
@@ -65,10 +81,16 @@ pub mod ClaimContract {
         accesscontrol: AccessControlComponent::Storage,
         #[substorage(v0)]
         upgradeable: UpgradeableComponent::Storage,
+        // Tournament configuration for MYSTERY_ASSET claims
         budokan_address: ContractAddress,
         tournament_ids_len: u64,
         tournament_ids: Map<u64, u64>,
-        claimed: Map<ContractAddress, bool>,
+        // Token addresses for each claimable item
+        lords_token: ContractAddress,
+        nums_token: ContractAddress,
+        survivor_token: ContractAddress,
+        credits_token: ContractAddress,
+        paper_token: ContractAddress,
     }
 
     #[event]
@@ -88,7 +110,6 @@ pub mod ClaimContract {
     pub struct TokenClaimed {
         pub recipient: ContractAddress,
         pub token_address: ContractAddress,
-        pub token_type: felt252,
         pub amount: u256,
     }
 
@@ -101,11 +122,24 @@ pub mod ClaimContract {
 
     #[constructor]
     fn constructor(
-        ref self: ContractState, owner: ContractAddress, forwarder_address: ContractAddress,
+        ref self: ContractState,
+        owner: ContractAddress,
+        forwarder_address: ContractAddress,
+        lords_token: ContractAddress,
+        nums_token: ContractAddress,
+        survivor_token: ContractAddress,
+        credits_token: ContractAddress,
+        paper_token: ContractAddress,
     ) {
         self.accesscontrol.initializer();
         self.accesscontrol._grant_role(DEFAULT_ADMIN_ROLE, owner);
         self.accesscontrol._grant_role(FORWARDER_ROLE, forwarder_address);
+
+        // Initialize token addresses
+        self.lords_token.write(lords_token);
+        self.nums_token.write(nums_token);
+        self.survivor_token.write(survivor_token);
+        self.paper_token.write(paper_token);
     }
 
     #[abi(embed_v0)]
@@ -151,52 +185,90 @@ pub mod ClaimContract {
             TournamentConfig { budokan_address, tournament_ids }
         }
 
-        fn has_claimed(self: @ContractState, address: ContractAddress) -> bool {
-            self.claimed.entry(address).read()
+        // ============ Claim Entrypoints ============
+
+        fn claim_lords_from_forwarder(
+            ref self: ContractState, recipient: ContractAddress, amount: u256,
+        ) {
+            self.accesscontrol.assert_only_role(FORWARDER_ROLE);
+            let token_address = self.lords_token.read();
+            self.transfer_erc20(token_address, recipient, amount);
+            self.emit(TokenClaimed { recipient, token_address, amount });
         }
 
-        fn claim_from_forwarder(
-            ref self: ContractState, recipient: ContractAddress, leaf_data: Span<felt252>,
+        fn claim_nums_from_forwarder(
+            ref self: ContractState, recipient: ContractAddress, amount: u256,
         ) {
-            // MUST check caller is forwarder
             self.accesscontrol.assert_only_role(FORWARDER_ROLE);
+            let token_address = self.nums_token.read();
+            self.transfer_erc721(token_address, recipient, amount);
+            self.emit(TokenClaimed { recipient, token_address, amount });
+        }
 
-            // Check if already claimed
-            assert(!self.claimed.entry(recipient).read(), 'Already claimed');
+        fn claim_survivor_from_forwarder(
+            ref self: ContractState, recipient: ContractAddress, amount: u256,
+        ) {
+            self.accesscontrol.assert_only_role(FORWARDER_ROLE);
+            let token_address = self.survivor_token.read();
+            self.transfer_erc721(token_address, recipient, amount);
+            self.emit(TokenClaimed { recipient, token_address, amount });
+        }
 
-            // Deserialize leaf_data
-            let mut leaf_data_mut = leaf_data;
-            let data = Serde::<LeafDataWithExtraData>::deserialize(ref leaf_data_mut).unwrap();
+        fn claim_paper_from_forwarder(
+            ref self: ContractState, recipient: ContractAddress, amount: u256,
+        ) {
+            self.accesscontrol.assert_only_role(FORWARDER_ROLE);
+            let token_address = self.paper_token.read();
+            self.transfer_erc20(token_address, recipient, amount);
+            self.emit(TokenClaimed { recipient, token_address, amount });
+        }
 
-            // Handle different token types
-            if data.token_type == ERC_20 {
-                self.transfer_erc20(data.token_address, recipient, data.amount);
-                self
-                    .emit(
-                        TokenClaimed {
-                            recipient,
-                            token_address: data.token_address,
-                            token_type: data.token_type,
-                            amount: data.amount,
-                        },
-                    );
-            } else if data.token_type == ERC_721 {
-                self.transfer_erc721(data.token_address, recipient, data.amount);
-                self
-                    .emit(
-                        TokenClaimed {
-                            recipient,
-                            token_address: data.token_address,
-                            token_type: data.token_type,
-                            amount: data.amount,
-                        },
-                    );
-            } else if data.token_type == MYSTERY_ASSET {
-                self.enter_all_tournaments(recipient);
-            }
+        fn claim_mystery_from_forwarder(
+            ref self: ContractState, recipient: ContractAddress, amount: u256,
+        ) {
+            self.accesscontrol.assert_only_role(FORWARDER_ROLE);
+            // amount parameter not used for MYSTERY_ASSET, included for consistency
+            self.enter_all_tournaments(recipient);
+        }
 
-            // Mark as claimed
-            self.claimed.entry(recipient).write(true);
+        // ============ Token Address Setters ============
+
+        fn set_lords_token(ref self: ContractState, address: ContractAddress) {
+            self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
+            self.lords_token.write(address);
+        }
+
+        fn set_nums_token(ref self: ContractState, address: ContractAddress) {
+            self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
+            self.nums_token.write(address);
+        }
+
+        fn set_survivor_token(ref self: ContractState, address: ContractAddress) {
+            self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
+            self.survivor_token.write(address);
+        }
+
+        fn set_paper_token(ref self: ContractState, address: ContractAddress) {
+            self.accesscontrol.assert_only_role(DEFAULT_ADMIN_ROLE);
+            self.paper_token.write(address);
+        }
+
+        // ============ Token Address Getters ============
+
+        fn get_lords_token(self: @ContractState) -> ContractAddress {
+            self.lords_token.read()
+        }
+
+        fn get_nums_token(self: @ContractState) -> ContractAddress {
+            self.nums_token.read()
+        }
+
+        fn get_survivor_token(self: @ContractState) -> ContractAddress {
+            self.survivor_token.read()
+        }
+
+        fn get_paper_token(self: @ContractState) -> ContractAddress {
+            self.paper_token.read()
         }
     }
 

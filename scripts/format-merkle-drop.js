@@ -2,37 +2,26 @@ import fs from 'fs';
 import { hash, ec } from 'starknet';
 import * as yaml from 'js-yaml';
 
-// Token type constants (matching Cairo constants)
-const TOKEN_TYPES = {
-  ERC_20: BigInt(hash.getSelectorFromName('ERC_20')),
-  ERC_721: BigInt(hash.getSelectorFromName('ERC_721')),
-  MYSTERY_ASSET: BigInt(hash.getSelectorFromName('MYSTERY_ASSET'))
-};
-
-// Token address mapping
-// These should match your deployed token contract addresses
-const TOKEN_ADDRESSES = {
-  CREDITS: process.env.CREDITS_TOKEN_ADDRESS || '0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7', // ETH on Sepolia as placeholder
-  LORDS: process.env.LORDS_TOKEN_ADDRESS || '0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7',
-  SURVIVOR: process.env.SURVIVOR_TOKEN_ADDRESS || '0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7',
-  NUMS: process.env.NUMS_TOKEN_ADDRESS || '0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7',
-  PAPER: process.env.PAPER_TOKEN_ADDRESS || '0x049d36570d4e46f48e99674bd3fcc84644ddd6b96f7c741b1562b82f9e004dc7',
-};
-
-// Zero address for MYSTERY_ASSET (no specific token)
-const ZERO_ADDRESS = '0x0';
+/**
+ * NEW ARCHITECTURE:
+ * - Leaf data now only contains the amount (u256)
+ * - Token addresses are stored in the claim contract storage, not in the merkle tree
+ * - Each item type (LORDS, NUMS, CREDITS, etc.) has its own claim entrypoint
+ * - This allows the same merkle tree to work on both mainnet and sepolia
+ * - Token addresses can be updated without regenerating the merkle tree
+ */
 
 /**
  * Parse a front string to extract token name and amount
  * @param {string} front - e.g., "CREDITS_150000000000000000000" or "MYSTERY_ASSET"
- * @returns {Object} { tokenName, amount, isMystery }
+ * @returns {Object} { tokenName, amount, itemType }
  */
 function parseFront(front) {
   if (front === 'MYSTERY_ASSET') {
     return {
       tokenName: 'MYSTERY_ASSET',
       amount: '0',
-      isMystery: true
+      itemType: 'mystery'
     };
   }
 
@@ -48,7 +37,7 @@ function parseFront(front) {
   return {
     tokenName,
     amount,
-    isMystery: false
+    itemType: tokenName.toLowerCase()
   };
 }
 
@@ -66,29 +55,14 @@ function ethAddressToStarknetFelt(ethAddress) {
 /**
  * Generate leaf data for a card claim
  * @param {Object} card - Card object with address and front
- * @returns {Object} Leaf data structure
+ * @returns {Object} Leaf data structure with amount and item type
  */
 function generateLeafData(card) {
-  const { tokenName, amount, isMystery } = parseFront(card.front);
-
-  if (isMystery) {
-    return {
-      amount: '0',
-      token_address: ZERO_ADDRESS,
-      token_type: TOKEN_TYPES.MYSTERY_ASSET.toString()
-    };
-  }
-
-  // For ERC20 tokens
-  const tokenAddress = TOKEN_ADDRESSES[tokenName];
-  if (!tokenAddress) {
-    throw new Error(`Unknown token: ${tokenName}`);
-  }
+  const { tokenName, amount, itemType } = parseFront(card.front);
 
   return {
     amount: amount,
-    token_address: tokenAddress,
-    token_type: TOKEN_TYPES.ERC_20.toString()
+    item_type: itemType  // 'lords', 'nums', 'credits', 'survivor', 'paper', or 'mystery'
   };
 }
 
@@ -113,8 +87,8 @@ async function main() {
     const stats = {
       total: data.cards.length,
       mystery: 0,
-      erc20: 0,
-      byToken: {}
+      tokens: 0,
+      byItem: {}
     };
 
     // Generate merkle drop data
@@ -123,18 +97,19 @@ async function main() {
       const leafData = generateLeafData(card);
 
       // Update statistics
-      const { tokenName, isMystery } = parseFront(card.front);
-      if (isMystery) {
+      const { tokenName, itemType } = parseFront(card.front);
+      if (itemType === 'mystery') {
         stats.mystery++;
       } else {
-        stats.erc20++;
-        stats.byToken[tokenName] = (stats.byToken[tokenName] || 0) + 1;
+        stats.tokens++;
       }
+      stats.byItem[itemType] = (stats.byItem[itemType] || 0) + 1;
 
       return {
         recipient: recipientAddress,
         index: index,
-        leaf_data: leafData
+        item_type: leafData.item_type,
+        amount: leafData.amount
       };
     });
 
@@ -149,18 +124,24 @@ async function main() {
     console.log(`📁 Output: ${outputPath}`);
     console.log('\n📊 Statistics:');
     console.log(`   Total cards: ${stats.total}`);
-    console.log(`   MYSTERY_ASSET: ${stats.mystery} (${((stats.mystery/stats.total)*100).toFixed(2)}%)`);
-    console.log(`   ERC20 tokens: ${stats.erc20} (${((stats.erc20/stats.total)*100).toFixed(2)}%)`);
-    console.log('\n   Token breakdown:');
-    Object.entries(stats.byToken).forEach(([token, count]) => {
-      console.log(`     ${token}: ${count} (${((count/stats.total)*100).toFixed(2)}%)`);
+    console.log(`   MYSTERY claims: ${stats.mystery} (${((stats.mystery/stats.total)*100).toFixed(2)}%)`);
+    console.log(`   Token claims: ${stats.tokens} (${((stats.tokens/stats.total)*100).toFixed(2)}%)`);
+    console.log('\n   Item breakdown:');
+    Object.entries(stats.byItem).forEach(([item, count]) => {
+      console.log(`     ${item}: ${count} (${((count/stats.total)*100).toFixed(2)}%)`);
     });
 
     console.log('\n💡 Next steps:');
-    console.log('   1. Update token addresses in .env file');
-    console.log('   2. Generate merkle tree from this data');
-    console.log('   3. Deploy contracts with merkle root');
-    console.log('   4. Configure tournament IDs');
+    console.log('   1. Deploy claim contract with token addresses');
+    console.log('   2. Generate merkle tree from this data (use item_type to determine which entrypoint)');
+    console.log('   3. Deploy forwarder contract with merkle root');
+    console.log('   4. Configure tournament IDs in claim contract');
+    console.log('   5. Token addresses can be updated later using setter functions');
+    console.log('\n🎯 Benefits:');
+    console.log('   ✓ Same merkle tree works on mainnet and sepolia');
+    console.log('   ✓ Token addresses can be updated without regenerating merkle tree');
+    console.log('   ✓ Users can claim multiple different items');
+    console.log('   ✓ Simpler leaf data structure');
 
   } catch (error) {
     console.error('❌ Error:', error.message);

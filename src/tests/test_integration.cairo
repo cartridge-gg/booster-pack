@@ -3,10 +3,9 @@ use snforge_std::{
     stop_cheat_caller_address,
 };
 use starknet::{ContractAddress, contract_address_const};
-use crate::{IClaimDispatcher, IClaimDispatcherTrait, TournamentConfig, LeafDataWithExtraData};
+use crate::{IClaimDispatcher, IClaimDispatcherTrait, TournamentConfig};
 use crate::mocks::budokan_mock::{IBudokanMockDispatcher, IBudokanMockDispatcherTrait};
 use crate::mocks::erc20_mock::{IERC20MockDispatcher, IERC20MockDispatcherTrait};
-use crate::constants::identifier::{ERC_20, MYSTERY_ASSET};
 
 fn OWNER() -> ContractAddress {
     contract_address_const::<'OWNER'>()
@@ -24,10 +23,26 @@ fn RECIPIENT_2() -> ContractAddress {
     contract_address_const::<'RECIPIENT_2'>()
 }
 
-fn deploy_claim_contract() -> IClaimDispatcher {
+fn deploy_claim_contract(
+    lords_token: ContractAddress,
+    nums_token: ContractAddress,
+    survivor_token: ContractAddress,
+    credits_token: ContractAddress,
+    paper_token: ContractAddress,
+) -> IClaimDispatcher {
     let contract = declare("ClaimContract").unwrap().contract_class();
     let (contract_address, _) = contract
-        .deploy(@array![OWNER().into(), FORWARDER().into()])
+        .deploy(
+            @array![
+                OWNER().into(),
+                FORWARDER().into(),
+                lords_token.into(),
+                nums_token.into(),
+                survivor_token.into(),
+                credits_token.into(),
+                paper_token.into(),
+            ]
+        )
         .unwrap();
     IClaimDispatcher { contract_address }
 }
@@ -80,65 +95,84 @@ fn setup_tournament_config(claim_contract: IClaimDispatcher, budokan: IBudokanMo
 // ========================================
 
 #[test]
-fn test_claim_erc20_tokens() {
-    let claim_contract = deploy_claim_contract();
+fn test_claim_paper_tokens() {
     let recipient = RECIPIENT();
 
     // Deploy ERC20 token and fund ClaimContract
     let token_supply: u256 = 10000000000000000000000_u256; // 10,000 tokens
-    let token_address = deploy_erc20("Credits", "CREDITS", token_supply, claim_contract.contract_address);
+    let zero_address = contract_address_const::<0x0>();
 
-    // Create leaf data for ERC_20 claim
-    let leaf_data = LeafDataWithExtraData {
-        amount: 150000000000000000000_u256, // 150 tokens
-        token_address: token_address,
-        token_type: ERC_20,
-    };
+    // Deploy claim contract first to get its address, then deploy token to fund it
+    let claim_contract = deploy_claim_contract(
+        zero_address, // lords (not needed for this test)
+        zero_address, // nums
+        zero_address, // survivor
+        zero_address, // credits
+        zero_address, // paper (will be set after deployment)
+    );
 
-    let mut serialized = array![];
-    Serde::serialize(@leaf_data, ref serialized);
+    let token_address = deploy_erc20("Paper", "PAPER", token_supply, claim_contract.contract_address);
 
-    // Claim tokens
+    // Set the paper token address
+    start_cheat_caller_address(claim_contract.contract_address, OWNER());
+    claim_contract.set_paper_token(token_address);
+    stop_cheat_caller_address(claim_contract.contract_address);
+
+    let amount: u256 = 150000000000000000000_u256; // 150 tokens
+
+    // Claim tokens using new entrypoint
     start_cheat_caller_address(claim_contract.contract_address, FORWARDER());
-    claim_contract.claim_from_forwarder(recipient, serialized.span());
+    claim_contract.claim_paper_from_forwarder(recipient, amount);
     stop_cheat_caller_address(claim_contract.contract_address);
 
     // Verify recipient received tokens
     let token = IERC20MockDispatcher { contract_address: token_address };
     let balance = token.balance_of(recipient);
     assert(balance == 150000000000000000000_u256, 'Wrong token balance');
-
-    // Verify claimed status
-    assert(claim_contract.has_claimed(recipient), 'Should be marked as claimed');
 }
 
 #[test]
-#[should_panic(expected: ('Already claimed',))]
-fn test_erc20_prevent_double_claim() {
-    let claim_contract = deploy_claim_contract();
+fn test_multi_claim_same_user() {
+    // Test that the same user can claim multiple different items
     let recipient = RECIPIENT();
+    let zero_address = contract_address_const::<0x0>();
 
+    let claim_contract = deploy_claim_contract(
+        zero_address, zero_address, zero_address, zero_address, zero_address,
+    );
+
+    // Deploy two different ERC20 tokens
     let token_supply: u256 = 10000000000000000000000_u256;
-    let token_address = deploy_erc20("Credits", "CREDITS", token_supply, claim_contract.contract_address);
+    let paper_address = deploy_erc20("Paper", "PAPER", token_supply, claim_contract.contract_address);
+    let lords_address = deploy_erc20("Lords", "LORDS", token_supply, claim_contract.contract_address);
 
-    let leaf_data = LeafDataWithExtraData {
-        amount: 150000000000000000000_u256,
-        token_address: token_address,
-        token_type: ERC_20,
-    };
-
-    let mut serialized = array![];
-    Serde::serialize(@leaf_data, ref serialized);
-
-    start_cheat_caller_address(claim_contract.contract_address, FORWARDER());
-
-    // First claim - should succeed
-    claim_contract.claim_from_forwarder(recipient, serialized.span());
-
-    // Second claim - should panic
-    claim_contract.claim_from_forwarder(recipient, serialized.span());
-
+    // Set token addresses
+    start_cheat_caller_address(claim_contract.contract_address, OWNER());
+    claim_contract.set_paper_token(paper_address);
+    claim_contract.set_lords_token(lords_address);
     stop_cheat_caller_address(claim_contract.contract_address);
+
+    let paper_amount: u256 = 150000000000000000000_u256;
+    let lords_amount: u256 = 75000000000000000000_u256;
+
+    // Same user claims PAPER
+    start_cheat_caller_address(claim_contract.contract_address, FORWARDER());
+    claim_contract.claim_paper_from_forwarder(recipient, paper_amount);
+    stop_cheat_caller_address(claim_contract.contract_address);
+
+    // Same user claims LORDS (should succeed - no duplicate claim check)
+    start_cheat_caller_address(claim_contract.contract_address, FORWARDER());
+    claim_contract.claim_lords_from_forwarder(recipient, lords_amount);
+    stop_cheat_caller_address(claim_contract.contract_address);
+
+    // Verify both claims succeeded
+    let paper_token = IERC20MockDispatcher { contract_address: paper_address };
+    let paper_balance = paper_token.balance_of(recipient);
+    assert(paper_balance == 150000000000000000000_u256, 'Wrong PAPER balance');
+
+    let lords_token = IERC20MockDispatcher { contract_address: lords_address };
+    let lords_balance = lords_token.balance_of(recipient);
+    assert(lords_balance == 75000000000000000000_u256, 'Wrong LORDS balance');
 }
 
 // ========================================
@@ -146,26 +180,20 @@ fn test_erc20_prevent_double_claim() {
 // ========================================
 
 #[test]
-fn test_claim_mystery_asset_tournaments() {
-    let claim_contract = deploy_claim_contract();
+fn test_claim_mystery_tournaments() {
+    let zero_address = contract_address_const::<0x0>();
+    let claim_contract = deploy_claim_contract(
+        zero_address, zero_address, zero_address, zero_address, zero_address,
+    );
     let budokan = deploy_budokan_mock();
     let recipient = RECIPIENT();
 
     setup_tournament_config(claim_contract, budokan);
 
-    // Create leaf data for MYSTERY_ASSET claim
-    let leaf_data = LeafDataWithExtraData {
-        amount: 0, // Not used for MYSTERY_ASSET
-        token_address: contract_address_const::<0x0>(),
-        token_type: MYSTERY_ASSET,
-    };
-
-    let mut serialized = array![];
-    Serde::serialize(@leaf_data, ref serialized);
-
-    // Claim tournament entries
+    // Claim tournament entries using new entrypoint
+    // Amount parameter is not used for mystery claims, but included for consistency
     start_cheat_caller_address(claim_contract.contract_address, FORWARDER());
-    claim_contract.claim_from_forwarder(recipient, serialized.span());
+    claim_contract.claim_mystery_from_forwarder(recipient, 0);
     stop_cheat_caller_address(claim_contract.contract_address);
 
     // Verify entries were created for all tournaments
@@ -182,9 +210,6 @@ fn test_claim_mystery_asset_tournaments() {
     // Verify total entries
     let total_entries = budokan.get_total_entries();
     assert(total_entries == 4, 'Should have 4 total entries');
-
-    // Verify claimed status
-    assert(claim_contract.has_claimed(recipient), 'Should be marked as claimed');
 }
 
 // ========================================
@@ -193,62 +218,47 @@ fn test_claim_mystery_asset_tournaments() {
 
 #[test]
 fn test_mixed_claim_types() {
-    let claim_contract = deploy_claim_contract();
+    let zero_address = contract_address_const::<0x0>();
+    let claim_contract = deploy_claim_contract(
+        zero_address, zero_address, zero_address, zero_address, zero_address,
+    );
     let budokan = deploy_budokan_mock();
 
     setup_tournament_config(claim_contract, budokan);
 
     // Deploy tokens
     let token_supply: u256 = 100000000000000000000000_u256;
-    let credits_address = deploy_erc20("Credits", "CREDITS", token_supply, claim_contract.contract_address);
+    let paper_address = deploy_erc20("Paper", "PAPER", token_supply, claim_contract.contract_address);
     let lords_address = deploy_erc20("Lords", "LORDS", token_supply, claim_contract.contract_address);
 
-    // Recipient 1: Claims ERC_20 (CREDITS)
+    // Set token addresses
+    start_cheat_caller_address(claim_contract.contract_address, OWNER());
+    claim_contract.set_paper_token(paper_address);
+    claim_contract.set_lords_token(lords_address);
+    stop_cheat_caller_address(claim_contract.contract_address);
+
+    // Recipient 1: Claims PAPER
     let recipient1 = contract_address_const::<'RECIPIENT_1'>();
-    let leaf_data1 = LeafDataWithExtraData {
-        amount: 150000000000000000000_u256,
-        token_address: credits_address,
-        token_type: ERC_20,
-    };
-    let mut serialized1 = array![];
-    Serde::serialize(@leaf_data1, ref serialized1);
-
     start_cheat_caller_address(claim_contract.contract_address, FORWARDER());
-    claim_contract.claim_from_forwarder(recipient1, serialized1.span());
+    claim_contract.claim_paper_from_forwarder(recipient1, 150000000000000000000_u256);
     stop_cheat_caller_address(claim_contract.contract_address);
 
-    // Recipient 2: Claims MYSTERY_ASSET (tournaments)
+    // Recipient 2: Claims MYSTERY (tournaments)
     let recipient2 = contract_address_const::<'RECIPIENT_2'>();
-    let leaf_data2 = LeafDataWithExtraData {
-        amount: 0,
-        token_address: contract_address_const::<0x0>(),
-        token_type: MYSTERY_ASSET,
-    };
-    let mut serialized2 = array![];
-    Serde::serialize(@leaf_data2, ref serialized2);
-
     start_cheat_caller_address(claim_contract.contract_address, FORWARDER());
-    claim_contract.claim_from_forwarder(recipient2, serialized2.span());
+    claim_contract.claim_mystery_from_forwarder(recipient2, 0);
     stop_cheat_caller_address(claim_contract.contract_address);
 
-    // Recipient 3: Claims ERC_20 (LORDS)
+    // Recipient 3: Claims LORDS
     let recipient3 = contract_address_const::<'RECIPIENT_3'>();
-    let leaf_data3 = LeafDataWithExtraData {
-        amount: 75000000000000000000_u256,
-        token_address: lords_address,
-        token_type: ERC_20,
-    };
-    let mut serialized3 = array![];
-    Serde::serialize(@leaf_data3, ref serialized3);
-
     start_cheat_caller_address(claim_contract.contract_address, FORWARDER());
-    claim_contract.claim_from_forwarder(recipient3, serialized3.span());
+    claim_contract.claim_lords_from_forwarder(recipient3, 75000000000000000000_u256);
     stop_cheat_caller_address(claim_contract.contract_address);
 
-    // Verify Recipient 1 got CREDITS
-    let credits_token = IERC20MockDispatcher { contract_address: credits_address };
-    let r1_balance = credits_token.balance_of(recipient1);
-    assert(r1_balance == 150000000000000000000_u256, 'R1: Wrong CREDITS balance');
+    // Verify Recipient 1 got PAPER
+    let paper_token = IERC20MockDispatcher { contract_address: paper_address };
+    let r1_balance = paper_token.balance_of(recipient1);
+    assert(r1_balance == 150000000000000000000_u256, 'R1: Wrong PAPER balance');
 
     // Verify Recipient 2 got tournament entries
     let total_entries = budokan.get_total_entries();
@@ -258,11 +268,6 @@ fn test_mixed_claim_types() {
     let lords_token = IERC20MockDispatcher { contract_address: lords_address };
     let r3_balance = lords_token.balance_of(recipient3);
     assert(r3_balance == 75000000000000000000_u256, 'R3: Wrong LORDS balance');
-
-    // Verify all claimed
-    assert(claim_contract.has_claimed(recipient1), 'R1 not claimed');
-    assert(claim_contract.has_claimed(recipient2), 'R2 not claimed');
-    assert(claim_contract.has_claimed(recipient3), 'R3 not claimed');
 }
 
 // ========================================
@@ -272,31 +277,33 @@ fn test_mixed_claim_types() {
 #[test]
 #[should_panic(expected: ('Caller is missing role',))]
 fn test_only_forwarder_can_claim() {
-    let claim_contract = deploy_claim_contract();
+    let zero_address = contract_address_const::<0x0>();
+    let claim_contract = deploy_claim_contract(
+        zero_address, zero_address, zero_address, zero_address, zero_address,
+    );
     let unauthorized = contract_address_const::<'UNAUTHORIZED'>();
     let recipient = RECIPIENT();
 
     let token_supply: u256 = 10000000000000000000000_u256;
-    let token_address = deploy_erc20("Credits", "CREDITS", token_supply, claim_contract.contract_address);
+    let token_address = deploy_erc20("Paper", "PAPER", token_supply, claim_contract.contract_address);
 
-    let leaf_data = LeafDataWithExtraData {
-        amount: 150000000000000000000_u256,
-        token_address: token_address,
-        token_type: ERC_20,
-    };
-
-    let mut serialized = array![];
-    Serde::serialize(@leaf_data, ref serialized);
+    // Set token address
+    start_cheat_caller_address(claim_contract.contract_address, OWNER());
+    claim_contract.set_paper_token(token_address);
+    stop_cheat_caller_address(claim_contract.contract_address);
 
     // Try to claim from unauthorized address - should panic
     start_cheat_caller_address(claim_contract.contract_address, unauthorized);
-    claim_contract.claim_from_forwarder(recipient, serialized.span());
+    claim_contract.claim_paper_from_forwarder(recipient, 150000000000000000000_u256);
     stop_cheat_caller_address(claim_contract.contract_address);
 }
 
 #[test]
 fn test_tournament_config() {
-    let claim_contract = deploy_claim_contract();
+    let zero_address = contract_address_const::<0x0>();
+    let claim_contract = deploy_claim_contract(
+        zero_address, zero_address, zero_address, zero_address, zero_address,
+    );
     let budokan = deploy_budokan_mock();
 
     let mut tournament_ids = ArrayTrait::new();
@@ -325,7 +332,10 @@ fn test_tournament_config() {
 
 #[test]
 fn test_tournament_config_single_tournament() {
-    let claim_contract = deploy_claim_contract();
+    let zero_address = contract_address_const::<0x0>();
+    let claim_contract = deploy_claim_contract(
+        zero_address, zero_address, zero_address, zero_address, zero_address,
+    );
     let budokan = deploy_budokan_mock();
     let recipient = RECIPIENT();
 
@@ -345,19 +355,9 @@ fn test_tournament_config_single_tournament() {
     claim_contract.set_tournament_config(config);
     stop_cheat_caller_address(claim_contract.contract_address);
 
-    // Create leaf data for MYSTERY_ASSET claim
-    let leaf_data = LeafDataWithExtraData {
-        amount: 0,
-        token_address: contract_address_const::<0x0>(),
-        token_type: MYSTERY_ASSET,
-    };
-
-    let mut serialized = array![];
-    Serde::serialize(@leaf_data, ref serialized);
-
     // Claim tournament entry
     start_cheat_caller_address(claim_contract.contract_address, FORWARDER());
-    claim_contract.claim_from_forwarder(recipient, serialized.span());
+    claim_contract.claim_mystery_from_forwarder(recipient, 0);
     stop_cheat_caller_address(claim_contract.contract_address);
 
     // Verify only one entry was created
@@ -366,12 +366,4 @@ fn test_tournament_config_single_tournament() {
 
     let total_entries = budokan.get_total_entries();
     assert(total_entries == 1, 'Should have 1 total entry');
-}
-
-#[test]
-fn test_unclaimed_address() {
-    let claim_contract = deploy_claim_contract();
-    let unclaimed_address = contract_address_const::<'UNCLAIMED'>();
-
-    assert(!claim_contract.has_claimed(unclaimed_address), 'Should not be claimed');
 }

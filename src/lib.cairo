@@ -19,5 +19,5 @@ pub mod tests {
 
 // Re-export for tests
 pub use main::{
-    IClaim, IClaimDispatcher, IClaimDispatcherTrait, TournamentConfig, LeafDataWithExtraData
+    IClaim, IClaimDispatcher, IClaimDispatcherTrait, TournamentConfig, LeafData
 };
