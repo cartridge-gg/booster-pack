@@ -1,11 +1,11 @@
 use snforge_std::{
-    declare, ContractClassTrait, DeclareResultTrait, start_cheat_caller_address,
+    ContractClassTrait, DeclareResultTrait, declare, start_cheat_caller_address,
     stop_cheat_caller_address,
 };
 use starknet::{ContractAddress, contract_address_const};
-use crate::{IClaimDispatcher, IClaimDispatcherTrait, TournamentConfig};
 use crate::mocks::budokan_mock::{IBudokanMockDispatcher, IBudokanMockDispatcherTrait};
 use crate::mocks::erc20_mock::{IERC20MockDispatcher, IERC20MockDispatcherTrait};
+use crate::{IClaimDispatcher, IClaimDispatcherTrait, TournamentConfig};
 
 fn OWNER() -> ContractAddress {
     contract_address_const::<'OWNER'>()
@@ -46,7 +46,7 @@ fn deploy_claim_contract(
                 survivor_token.into(),
                 credits_token.into(),
                 paper_token.into(),
-            ]
+            ],
         )
         .unwrap();
     IClaimDispatcher { contract_address }
@@ -59,7 +59,7 @@ fn deploy_budokan_mock() -> IBudokanMockDispatcher {
 }
 
 fn deploy_erc20(
-    name: ByteArray, symbol: ByteArray, supply: u256, recipient: ContractAddress
+    name: ByteArray, symbol: ByteArray, supply: u256, recipient: ContractAddress,
 ) -> ContractAddress {
     let contract = declare("ERC20Mock").unwrap().contract_class();
     let mut calldata = array![];
@@ -79,9 +79,7 @@ fn setup_tournament_config(claim_contract: IClaimDispatcher, budokan: IBudokanMo
     tournament_ids.append(3);
     tournament_ids.append(4);
 
-    let config = TournamentConfig {
-        budokan_address: budokan.contract_address, tournament_ids,
-    };
+    let config = TournamentConfig { budokan_address: budokan.contract_address, tournament_ids };
 
     // Set ClaimContract on allowlist for each tournament
     budokan.set_tournament_allowlist(1, claim_contract.contract_address);
@@ -114,7 +112,7 @@ fn test_claim_paper_tokens() {
         zero_address, // nums
         zero_address, // survivor
         zero_address, // credits
-        zero_address, // paper (will be set after deployment)
+        zero_address // paper (will be set after deployment)
     );
 
     // Deploy token to treasury
@@ -351,9 +349,7 @@ fn test_tournament_config() {
     tournament_ids.append(3);
     tournament_ids.append(4);
 
-    let config = TournamentConfig {
-        budokan_address: budokan.contract_address, tournament_ids,
-    };
+    let config = TournamentConfig { budokan_address: budokan.contract_address, tournament_ids };
 
     start_cheat_caller_address(claim_contract.contract_address, OWNER());
     claim_contract.set_tournament_config(config);
@@ -382,9 +378,7 @@ fn test_tournament_config_single_tournament() {
     let mut tournament_ids = ArrayTrait::new();
     tournament_ids.append(1);
 
-    let config = TournamentConfig {
-        budokan_address: budokan.contract_address, tournament_ids,
-    };
+    let config = TournamentConfig { budokan_address: budokan.contract_address, tournament_ids };
 
     // Set ClaimContract on allowlist
     budokan.set_tournament_allowlist(1, claim_contract.contract_address);

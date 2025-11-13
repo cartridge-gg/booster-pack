@@ -7,25 +7,20 @@ pub trait IERC20Mock<TContractState> {
     fn decimals(self: @TContractState) -> u8;
     fn total_supply(self: @TContractState) -> u256;
     fn balance_of(self: @TContractState, account: ContractAddress) -> u256;
-    fn allowance(
-        self: @TContractState, owner: ContractAddress, spender: ContractAddress
-    ) -> u256;
+    fn allowance(self: @TContractState, owner: ContractAddress, spender: ContractAddress) -> u256;
     fn transfer(ref self: TContractState, recipient: ContractAddress, amount: u256) -> bool;
     fn transfer_from(
-        ref self: TContractState,
-        sender: ContractAddress,
-        recipient: ContractAddress,
-        amount: u256
+        ref self: TContractState, sender: ContractAddress, recipient: ContractAddress, amount: u256,
     ) -> bool;
     fn approve(ref self: TContractState, spender: ContractAddress, amount: u256) -> bool;
 }
 
 #[starknet::contract]
 pub mod ERC20Mock {
-    use starknet::{ContractAddress, get_caller_address};
     use starknet::storage::{
-        Map, StoragePathEntry, StoragePointerReadAccess, StoragePointerWriteAccess
+        Map, StoragePathEntry, StoragePointerReadAccess, StoragePointerWriteAccess,
     };
+    use starknet::{ContractAddress, get_caller_address};
 
     #[storage]
     struct Storage {
@@ -63,7 +58,7 @@ pub mod ERC20Mock {
         name: ByteArray,
         symbol: ByteArray,
         initial_supply: u256,
-        recipient: ContractAddress
+        recipient: ContractAddress,
     ) {
         self.name.write(name);
         self.symbol.write(symbol);
@@ -97,7 +92,7 @@ pub mod ERC20Mock {
         }
 
         fn allowance(
-            self: @ContractState, owner: ContractAddress, spender: ContractAddress
+            self: @ContractState, owner: ContractAddress, spender: ContractAddress,
         ) -> u256 {
             self.allowances.entry((owner, spender)).read()
         }
@@ -112,7 +107,7 @@ pub mod ERC20Mock {
             ref self: ContractState,
             sender: ContractAddress,
             recipient: ContractAddress,
-            amount: u256
+            amount: u256,
         ) -> bool {
             let caller = get_caller_address();
             let current_allowance = self.allowances.entry((sender, caller)).read();
@@ -137,7 +132,7 @@ pub mod ERC20Mock {
             ref self: ContractState,
             sender: ContractAddress,
             recipient: ContractAddress,
-            amount: u256
+            amount: u256,
         ) {
             let sender_balance = self.balances.entry(sender).read();
             assert(sender_balance >= amount, 'Insufficient balance');

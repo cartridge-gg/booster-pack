@@ -1,5 +1,5 @@
-use starknet::ContractAddress;
 use booster_pack_devconnect::constants::interface::QualificationProof;
+use starknet::ContractAddress;
 
 #[starknet::interface]
 pub trait IBudokanMock<TContractState> {
@@ -13,17 +13,17 @@ pub trait IBudokanMock<TContractState> {
     fn get_tournament_entry_count(self: @TContractState, tournament_id: u64) -> u32;
     fn get_total_entries(self: @TContractState) -> u64;
     fn set_tournament_allowlist(
-        ref self: TContractState, tournament_id: u64, allowed_address: ContractAddress
+        ref self: TContractState, tournament_id: u64, allowed_address: ContractAddress,
     );
 }
 
 #[starknet::contract]
 pub mod BudokanMock {
-    use starknet::{ContractAddress, get_caller_address};
-    use starknet::storage::{
-        Map, StoragePathEntry, StoragePointerReadAccess, StoragePointerWriteAccess
-    };
     use booster_pack_devconnect::constants::interface::QualificationProof;
+    use starknet::storage::{
+        Map, StoragePathEntry, StoragePointerReadAccess, StoragePointerWriteAccess,
+    };
+    use starknet::{ContractAddress, get_caller_address};
 
     #[storage]
     struct Storage {
@@ -76,7 +76,7 @@ pub mod BudokanMock {
                         assert(caller == configured_allowlist, 'Not on allowlist');
                         assert(allowed_addr == caller, 'Invalid allowlist proof');
                     },
-                    _ => { panic!("Only allowlist supported"); }
+                    _ => { panic!("Only allowlist supported"); },
                 }
             }
 
@@ -96,8 +96,12 @@ pub mod BudokanMock {
             self
                 .emit(
                     TournamentEntered {
-                        tournament_id, player_address, player_name, game_token_id: token_id, entry_number
-                    }
+                        tournament_id,
+                        player_address,
+                        player_name,
+                        game_token_id: token_id,
+                        entry_number,
+                    },
                 );
 
             (token_id, entry_number)
@@ -112,7 +116,7 @@ pub mod BudokanMock {
         }
 
         fn set_tournament_allowlist(
-            ref self: ContractState, tournament_id: u64, allowed_address: ContractAddress
+            ref self: ContractState, tournament_id: u64, allowed_address: ContractAddress,
         ) {
             self.tournament_allowlists.entry(tournament_id).write(allowed_address);
         }
