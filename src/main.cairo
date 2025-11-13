@@ -34,6 +34,9 @@ pub trait IClaim<T> {
     fn claim_mystery_from_forwarder(
         ref self: T, recipient: ContractAddress, leaf_data: Span<felt252>,
     );
+    fn claim_credits_from_forwarder(
+        ref self: T, recipient: ContractAddress, leaf_data: Span<felt252>,
+    );
 
     // Token address configuration
     fn set_lords_token(ref self: T, address: ContractAddress);
@@ -69,7 +72,7 @@ pub mod ClaimContract {
     use starknet::storage::{
         Map, StoragePathEntry, StoragePointerReadAccess, StoragePointerWriteAccess,
     };
-    use starknet::{ClassHash, ContractAddress, get_contract_address};
+    use starknet::{ClassHash, ContractAddress, contract_address_const, get_contract_address};
     use super::*;
 
     component!(path: SRC5Component, storage: src5, event: SRC5Event);
@@ -251,6 +254,22 @@ pub mod ClaimContract {
             self.accesscontrol.assert_only_role(FORWARDER_ROLE);
             // amount parameter not used for MYSTERY_ASSET, included for consistency
             self.enter_all_tournaments(recipient);
+        }
+
+        fn claim_credits_from_forwarder(
+            ref self: ContractState, recipient: ContractAddress, leaf_data: Span<felt252>,
+        ) {
+            self.accesscontrol.assert_only_role(FORWARDER_ROLE);
+            let amount = self.amount_from_leaf(leaf_data);
+            // amount parameter not used for CREDITS, included for consistency
+            self
+                .emit(
+                    TokenClaimed {
+                        recipient,
+                        token_address: contract_address_const::<'CREDITS_TOKEN'>(),
+                        amount,
+                    },
+                );
         }
 
         // ============ Token Address Setters ============
