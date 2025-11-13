@@ -106,7 +106,6 @@ pub mod ClaimContract {
         lords_token: ContractAddress,
         nums_token: ContractAddress,
         survivor_token: ContractAddress,
-        credits_token: ContractAddress,
         paper_token: ContractAddress,
     }
 
@@ -146,7 +145,6 @@ pub mod ClaimContract {
         lords_token: ContractAddress,
         nums_token: ContractAddress,
         survivor_token: ContractAddress,
-        credits_token: ContractAddress,
         paper_token: ContractAddress,
     ) {
         self.accesscontrol.initializer();
