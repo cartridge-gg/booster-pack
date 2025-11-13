@@ -6,7 +6,7 @@ const FORWARDER_ROLE: felt252 = selector!("FORWARDER_ROLE");
 // Token addresses are now stored in the contract
 #[derive(Drop, Copy, Serde, PartialEq)]
 pub struct LeafData {
-    pub amount: u256,
+    pub amount: u32 // So we can use this directly in frontend without conversion
 }
 
 // Tournament configuration for MYSTERY_ASSET claims
@@ -21,11 +21,19 @@ pub trait IClaim<T> {
     fn initialize(ref self: T, forwarder_address: ContractAddress);
 
     // Separate claim entrypoints for each item type
-    fn claim_lords_from_forwarder(ref self: T, recipient: ContractAddress, amount: u256);
-    fn claim_nums_from_forwarder(ref self: T, recipient: ContractAddress, amount: u256);
-    fn claim_survivor_from_forwarder(ref self: T, recipient: ContractAddress, amount: u256);
-    fn claim_paper_from_forwarder(ref self: T, recipient: ContractAddress, amount: u256);
-    fn claim_mystery_from_forwarder(ref self: T, recipient: ContractAddress, amount: u256);
+    fn claim_lords_from_forwarder(
+        ref self: T, recipient: ContractAddress, leaf_data: Span<felt252>,
+    );
+    fn claim_nums_from_forwarder(ref self: T, recipient: ContractAddress, leaf_data: Span<felt252>);
+    fn claim_survivor_from_forwarder(
+        ref self: T, recipient: ContractAddress, leaf_data: Span<felt252>,
+    );
+    fn claim_paper_from_forwarder(
+        ref self: T, recipient: ContractAddress, leaf_data: Span<felt252>,
+    );
+    fn claim_mystery_from_forwarder(
+        ref self: T, recipient: ContractAddress, leaf_data: Span<felt252>,
+    );
 
     // Token address configuration
     fn set_lords_token(ref self: T, address: ContractAddress);
@@ -53,6 +61,7 @@ pub mod ClaimContract {
         IBudokanDispatcher, IBudokanDispatcherTrait, IERC20TokenDispatcher,
         IERC20TokenDispatcherTrait, QualificationProof,
     };
+    use booster_pack_devconnect::constants::units::TEN_POW_18;
     use openzeppelin_access::accesscontrol::{AccessControlComponent, DEFAULT_ADMIN_ROLE};
     use openzeppelin_introspection::src5::SRC5Component;
     use openzeppelin_upgrades::UpgradeableComponent;
@@ -197,43 +206,47 @@ pub mod ClaimContract {
         // ============ Claim Entrypoints ============
 
         fn claim_lords_from_forwarder(
-            ref self: ContractState, recipient: ContractAddress, amount: u256,
+            ref self: ContractState, recipient: ContractAddress, leaf_data: Span<felt252>,
         ) {
             self.accesscontrol.assert_only_role(FORWARDER_ROLE);
             let token_address = self.lords_token.read();
+            let amount = self.amount_from_leaf(leaf_data);
             self.transfer_erc20(token_address, recipient, amount);
             self.emit(TokenClaimed { recipient, token_address, amount });
         }
 
         fn claim_nums_from_forwarder(
-            ref self: ContractState, recipient: ContractAddress, amount: u256,
+            ref self: ContractState, recipient: ContractAddress, leaf_data: Span<felt252>,
         ) {
             self.accesscontrol.assert_only_role(FORWARDER_ROLE);
             let token_address = self.nums_token.read();
+            let amount = self.amount_from_leaf(leaf_data);
             self.transfer_erc20(token_address, recipient, amount);
             self.emit(TokenClaimed { recipient, token_address, amount });
         }
 
         fn claim_survivor_from_forwarder(
-            ref self: ContractState, recipient: ContractAddress, amount: u256,
+            ref self: ContractState, recipient: ContractAddress, leaf_data: Span<felt252>,
         ) {
             self.accesscontrol.assert_only_role(FORWARDER_ROLE);
             let token_address = self.survivor_token.read();
+            let amount = self.amount_from_leaf(leaf_data);
             self.transfer_erc20(token_address, recipient, amount);
             self.emit(TokenClaimed { recipient, token_address, amount });
         }
 
         fn claim_paper_from_forwarder(
-            ref self: ContractState, recipient: ContractAddress, amount: u256,
+            ref self: ContractState, recipient: ContractAddress, leaf_data: Span<felt252>,
         ) {
             self.accesscontrol.assert_only_role(FORWARDER_ROLE);
             let token_address = self.paper_token.read();
+            let amount = self.amount_from_leaf(leaf_data);
             self.transfer_erc20(token_address, recipient, amount);
             self.emit(TokenClaimed { recipient, token_address, amount });
         }
 
         fn claim_mystery_from_forwarder(
-            ref self: ContractState, recipient: ContractAddress, amount: u256,
+            ref self: ContractState, recipient: ContractAddress, leaf_data: Span<felt252>,
         ) {
             self.accesscontrol.assert_only_role(FORWARDER_ROLE);
             // amount parameter not used for MYSTERY_ASSET, included for consistency
@@ -294,6 +307,12 @@ pub mod ClaimContract {
 
     #[generate_trait]
     impl InternalImpl of InternalTrait {
+        fn amount_from_leaf(ref self: ContractState, leaf_data: Span<felt252>) -> u256 {
+            let mut leaf_data = leaf_data;
+            let data = Serde::<LeafData>::deserialize(ref leaf_data).unwrap();
+            data.amount.into() * TEN_POW_18
+        }
+
         fn transfer_erc20(
             self: @ContractState,
             token_address: ContractAddress,
